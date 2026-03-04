@@ -975,7 +975,11 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
 
   if (!compact) {
     const introSticker = await db.getConfig('intro_sticker_media');
-    if (introSticker) await sendWhatsAppSticker(to, introSticker);
+    if (introSticker) {
+      sendWhatsAppSticker(to, introSticker).catch((err) => {
+        console.error('[WhatsApp] Intro sticker async failed:', err?.message || err);
+      });
+    }
   }
 
   const payload = {
@@ -1529,7 +1533,11 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     const kidsSticker = await db.getConfig('kids_sticker_media');
-    if (kidsSticker) await sendWhatsAppSticker(from, kidsSticker);
+    if (kidsSticker) {
+      sendWhatsAppSticker(from, kidsSticker).catch((err) => {
+        console.error('[WhatsApp] Kids sticker async failed:', err?.message || err);
+      });
+    }
     const kidsMsg = await buildKidsInfoMessage();
     await sendWhatsAppText(from, kidsMsg);
     await sendMainMenu(from, true);
