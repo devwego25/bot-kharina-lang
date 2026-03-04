@@ -61,7 +61,8 @@ export class LangChainService {
   async processMessage(
     sessionId: string,
     message: string,
-    context: ChatRequest['context']
+    context: ChatRequest['context'],
+    options?: { timeoutMs?: number }
   ): Promise<ChatResponse> {
     try {
       console.log(`[LangChain] Sending message to agent: ${message.substring(0, 50)}...`);
@@ -73,7 +74,9 @@ export class LangChainService {
         context
       };
 
-      const response = await this.client.post<ChatResponse>('/agent/chat', request);
+      const response = await this.client.post<ChatResponse>('/agent/chat', request, {
+        timeout: options?.timeoutMs
+      });
 
       console.log(`[LangChain] Response received: intent=${response.data.intent}, tool=${response.data.tool_called}`);
 

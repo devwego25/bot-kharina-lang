@@ -275,7 +275,7 @@ async def get_mcp_clients() -> Dict[str, McpClient]:
             token=settings.MCP_RESERVAS_TOKEN,
             token_in_url=False,
             transport="streamable",
-            timeout=8.0
+            timeout=20.0
         )
 
         # Connect all clients

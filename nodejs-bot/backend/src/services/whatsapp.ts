@@ -1033,6 +1033,9 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       preferred_unit_name: state.preferred_unit_name,
       preferred_city: state.preferred_city,
       reservation_state: state.reservation
+    }, {
+      // Confirmation can involve slower MCP operations (availability/create).
+      timeoutMs: text === 'confirm_reserva_sim' ? 25000 : undefined
     });
     logStep('langchain.processMessage', langchainStart);
 
