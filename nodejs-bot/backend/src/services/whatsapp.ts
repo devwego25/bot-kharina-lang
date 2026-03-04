@@ -271,24 +271,37 @@ function extractStandalonePeople(text: string): number | null {
   return n;
 }
 
-function extractAdultsDelta(text: string): number | null {
+function extractPartyDeltas(text: string): { adultsDelta: number; kidsDelta: number } | null {
   const t = String(text || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
   if (!t) return null;
 
-  if (/\bmais\s+(um|1)\s+casal\b/.test(t)) return 2;
+  let adultsDelta = 0;
+  let kidsDelta = 0;
 
-  const casais = t.match(/\bmais\s+(\d+)\s+casais\b/);
-  if (casais) return Number(casais[1]) * 2;
+  // Casais sempre contam como adultos.
+  if (/\bmais\s+(um|1)\s+casal\b/.test(t)) adultsDelta += 2;
+  if (/\bmenos\s+(um|1)\s+casal\b/.test(t)) adultsDelta -= 2;
 
-  const adultos =
-    t.match(/\bmais\s+(\d+)\s+(adulto|adultos|pessoa|pessoas)\b/) ||
-    t.match(/\bmais\s+(um|uma)\s+(adulto|pessoa)\b/);
-  if (!adultos) return null;
-  const raw = adultos[1];
-  return raw === 'um' || raw === 'uma' ? 1 : Number(raw);
+  const casaisMais = t.match(/\bmais\s+(\d+)\s+casais\b/);
+  if (casaisMais) adultsDelta += Number(casaisMais[1]) * 2;
+  const casaisMenos = t.match(/\bmenos\s+(\d+)\s+casais\b/);
+  if (casaisMenos) adultsDelta -= Number(casaisMenos[1]) * 2;
+
+  const plusAdults = [...t.matchAll(/\bmais\s+(\d+|um|uma)\s+(adulto|adultos|pessoa|pessoas)\b/g)];
+  for (const m of plusAdults) adultsDelta += (m[1] === 'um' || m[1] === 'uma') ? 1 : Number(m[1]);
+  const minusAdults = [...t.matchAll(/\bmenos\s+(\d+|um|uma)\s+(adulto|adultos|pessoa|pessoas)\b/g)];
+  for (const m of minusAdults) adultsDelta -= (m[1] === 'um' || m[1] === 'uma') ? 1 : Number(m[1]);
+
+  const plusKids = [...t.matchAll(/\bmais\s+(\d+|uma|um)\s+(crianca|criancas)\b/g)];
+  for (const m of plusKids) kidsDelta += (m[1] === 'um' || m[1] === 'uma') ? 1 : Number(m[1]);
+  const minusKids = [...t.matchAll(/\bmenos\s+(\d+|uma|um)\s+(crianca|criancas)\b/g)];
+  for (const m of minusKids) kidsDelta -= (m[1] === 'um' || m[1] === 'uma') ? 1 : Number(m[1]);
+
+  if (!adultsDelta && !kidsDelta) return null;
+  return { adultsDelta, kidsDelta };
 }
 
 function sanitizeWhatsAppText(text: string): string {
@@ -1710,10 +1723,15 @@ async function handleDeterministicCommand(
   // Deterministic slot-filling while in active reservation flow
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
     const extracted = parseReservationDetails(text);
-    if (!extracted.people) {
-      const adultsDelta = extractAdultsDelta(text);
-      if (adultsDelta && state.reservation?.people) {
-        extracted.people = Number(state.reservation.people) + adultsDelta;
+    if (state.reservation) {
+      const deltas = extractPartyDeltas(text);
+      if (deltas) {
+        if (deltas.adultsDelta !== 0 && state.reservation.people !== undefined && extracted.people === undefined) {
+          extracted.people = Math.max(1, Number(state.reservation.people) + deltas.adultsDelta);
+        }
+        if (deltas.kidsDelta !== 0 && state.reservation.kids !== undefined && extracted.kids === undefined) {
+          extracted.kids = Math.max(0, Number(state.reservation.kids) + deltas.kidsDelta);
+        }
       }
     }
     // If only people is missing, accept "4" style answers.
