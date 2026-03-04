@@ -22,7 +22,7 @@ services:
       - LOG_LEVEL=INFO
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
-      - NO_PROXY=${NO_PROXY}
+      - NO_PROXY=langchain,${NO_PROXY}
     networks:
       - kharina-network
       - KharinaNet  # To reach cardapio_app
@@ -72,7 +72,7 @@ services:
       - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
-      - NO_PROXY=${NO_PROXY}
+      - NO_PROXY=langchain,${NO_PROXY}
     networks:
       - kharina-network
       - KharinaNet
