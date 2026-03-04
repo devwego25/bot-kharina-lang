@@ -110,6 +110,13 @@ function toIsoDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function toBrDate(isoOrBr: string): string {
+  const v = String(isoOrBr || '').trim();
+  const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  return v;
+}
+
 function parseReservationDetails(text: string): Partial<ReservationState> {
   const raw = String(text || '').trim();
   const t = raw.toLowerCase();
@@ -342,6 +349,12 @@ function pickReservationCode(res: any): { id?: string; code?: string; status?: s
   };
 }
 
+function displayReservationCode(picked: { id?: string; code?: string }): string | undefined {
+  if (picked.code && String(picked.code).trim()) return String(picked.code).trim().toUpperCase();
+  if (picked.id && String(picked.id).trim()) return String(picked.id).trim().split('-')[0].toUpperCase();
+  return undefined;
+}
+
 async function createReservationDeterministic(from: string, state: UserState): Promise<{ ok: boolean; message: string; }> {
   const r = state.reservation || {};
   const storeId = state.preferred_store_id;
@@ -416,22 +429,30 @@ async function createReservationDeterministic(from: string, state: UserState): P
       };
     }
 
-    if (!picked.id && !picked.code) {
+    const displayCode = displayReservationCode(picked);
+    if (!picked.id && !displayCode) {
       return {
         ok: false,
         message: 'Não consegui validar o código da reserva no retorno do sistema. Vou manter os dados e tentar novamente.'
       };
     }
 
+    const statusMap: Record<string, string> = {
+      confirmed: 'Confirmada',
+      waiting: 'Em espera',
+      cancelled: 'Cancelada',
+      canceled: 'Cancelada'
+    };
+    const statusLabel = statusMap[String(picked.status || '').toLowerCase()] || (picked.status ? String(picked.status) : undefined);
+
     const lines = [
       `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
-      `📅 Data: ${date}`,
+      `📅 Data: ${toBrDate(date)}`,
       `⏰ Horário: ${time}`,
       `👥 Pessoas: ${people}`,
       `👶 Crianças: ${kids}`,
-      picked.code ? `🔢 Código da reserva: ${picked.code}` : '',
-      picked.id ? `🆔 ID da reserva: ${picked.id}` : '',
-      picked.status ? `✅ Status: ${picked.status}` : ''
+      displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
+      statusLabel ? `✅ Status: ${statusLabel}` : ''
     ].filter(Boolean);
 
     state.reservation = undefined;
@@ -789,6 +810,8 @@ async function handleDeterministicCommand(
     normalized.includes('quero reservar') ||
     normalized.includes('fazer reserva') ||
     normalized.includes('reservar mesa');
+  const isReservationManageIntent =
+    /\b(minha(s)? reserva(s)?|consult(a|ar)|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
   const timeOnlyPattern =
     /\bhoje\b/.test(normalized) &&
     /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
@@ -819,6 +842,11 @@ async function handleDeterministicCommand(
     userStates.set(from, state);
     await sendMainMenu(from, compact);
     return true;
+  }
+
+  // Natural language reservation intent -> traditional interactive flow
+  if (isReservationManageIntent && !isInActiveFlow(state)) {
+    return false; // let agent handle query/cancel/change
   }
 
   // Natural language reservation intent -> traditional interactive flow
