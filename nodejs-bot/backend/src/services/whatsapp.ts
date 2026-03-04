@@ -57,6 +57,7 @@ const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio,
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery']);
 const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite']);
+const GREETING_REGEX = /\b(oi|ol[áa]|bom dia|boa tarde|boa noite|e ai|e aí|opa|tudo bem|tudo bom)\b/i;
 const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
   unidade_botanico: { name: 'Jardim Botânico', storeId: 'a99c098f-c16b-4168-a5b1-54e76aa1a855' },
   unidade_cabral: { name: 'Cabral', storeId: 'c6919b3c-f5ff-4006-a226-2b493d9d8cf5' },
@@ -782,7 +783,7 @@ async function handleDeterministicCommand(
   profileName?: string
 ): Promise<boolean> {
   const normalized = text.trim().toLowerCase();
-  const isGreeting = GREETING_COMMANDS.has(normalized);
+  const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
