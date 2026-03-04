@@ -92,14 +92,6 @@ exports.promptService = {
             const finalPrompt = basePrompt
                 .replace('{{current_date}}', dateStr)
                 .replace('{{current_weekday}}', weekDay);
-            // Verify critical variables in log for diagnostic purposes
-            const maxPeopleMatch = finalPrompt.match(/(\d+) pessoas/);
-            if (maxPeopleMatch) {
-                console.log(`[PromptService] 📊 Capacity in prompt: ${maxPeopleMatch[0]}`);
-            }
-            else if (finalPrompt.includes('{{max_reservation_people}}')) {
-                console.warn(`[PromptService] ⚠️ Variable {{max_reservation_people}} NOT substituted!`);
-            }
             return finalPrompt;
         }
         catch (err) {

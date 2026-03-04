@@ -130,7 +130,7 @@ class McpClient {
             console.log(`[MCP ${this.name}] POST initialize (ID: ${requestId})`);
             const response = await axios_1.default.post(this.baseUrl, payload, {
                 headers: this.getHeaders(),
-                timeout: 30000,
+                timeout: 60000,
                 // Important: accept both JSON and SSE responses
                 transformResponse: [(data) => data], // Keep raw response
                 // @ts-expect-error
@@ -269,7 +269,7 @@ class McpClient {
                 protocolVersion: '2024-11-05',
                 capabilities: {},
                 clientInfo: { name: 'KharinaAgent', version: '1.0.0' }
-            }, 30000);
+            }, 60000);
             const protocolVersion = initResponse?.protocolVersion || 'unknown';
             console.log(`[MCP ${this.name}] Server initialized. Protocol: ${protocolVersion}`);
             console.log(`[MCP ${this.name}] Sending 'notifications/initialized'...`);
@@ -298,7 +298,7 @@ class McpClient {
      * Send a JSON-RPC request over SSE transport.
      * Handles both synchronous (inline HTTP response) and async (SSE event) responses.
      */
-    async sendSSERequest(method, params, timeoutMs = 30000) {
+    async sendSSERequest(method, params, timeoutMs = 60000) {
         if (!this.sessionEndpoint)
             throw new Error(`No session endpoint for ${this.name}`);
         const requestId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -442,7 +442,7 @@ class McpClient {
         return null;
     }
     // ─── Public API ─────────────────────────────────────────────────────
-    async waitReady(timeoutMs = 30000) {
+    async waitReady(timeoutMs = 60000) {
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
             if (this.isInitialized)
@@ -511,7 +511,7 @@ class McpClient {
         console.log(`[MCP ${this.name}] POST ${method} (ID: ${requestId})`);
         const response = await axios_1.default.post(this.baseUrl, payload, {
             headers: this.getHeaders(),
-            timeout: 30000,
+            timeout: 60000,
             transformResponse: [(data) => data],
             // @ts-expect-error
             proxy: false

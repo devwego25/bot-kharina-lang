@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 import { config } from '../config/env';
 
 const LANGCHAIN_URL = process.env.LANGCHAIN_URL || 'http://localhost:8000';
@@ -78,8 +78,8 @@ export class LangChainService {
       console.log(`[LangChain] Response received: intent=${response.data.intent}, tool=${response.data.tool_called}`);
 
       return response.data;
-    } catch (error) {
-      if (error instanceof AxiosError) {
+    } catch (error: any) {
+      if (error && typeof error === 'object' && 'response' in error) {
         console.error('[LangChain] HTTP Error:', error.response?.status, error.response?.data);
         return {
           response: "Desculpe, tive um probleminha técnico aqui. 😅 Pode repetir por favor?",
@@ -100,7 +100,7 @@ export class LangChainService {
   async healthCheck(): Promise<boolean> {
     try {
       const response = await this.client.get('/health');
-      return response.data.status === 'healthy';
+      return (response.data as any).status === 'healthy';
     } catch (error) {
       console.error('[LangChain] Health check failed:', error);
       return false;

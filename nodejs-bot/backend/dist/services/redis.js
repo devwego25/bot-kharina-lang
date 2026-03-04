@@ -59,19 +59,38 @@ exports.redisService = {
         }
     },
     /**
-     * Content-based dedup: blocks same text from same user within 10s.
+     * Content-based dedup: blocks same text from same user within 30s.
      * Returns true if this is a duplicate (should be skipped).
      */
     isDuplicateContent: async (userId, text) => {
         try {
-            // Create a simple hash from userId + text
-            const key = `cdedup:${userId}:${text}`;
-            const result = await redis.set(key, '1', 'EX', 10, 'NX');
-            return result !== 'OK'; // If NX failed, it's a duplicate
+            if (!text || text.trim().length === 0)
+                return false;
+            // Create a hash from userId + normalized text
+            const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
+            const key = `cdedup:${userId}:${normalized}`;
+            // Try to set with NX (only if not exists) and 30s TTL
+            const result = await redis.set(key, '1', 'EX', 30, 'NX');
+            // If result is null, key already existed (duplicate)
+            return result !== 'OK';
         }
         catch (err) {
             console.error('[Redis] Error checking content dedup:', err);
             return false; // fail-open
+        }
+    },
+    /**
+     * Clear all data for a user (useful for testing)
+     */
+    clearUser: async (userId) => {
+        try {
+            const keys = await redis.keys(`*:${userId}*`);
+            if (keys.length > 0) {
+                await redis.del(...keys);
+            }
+        }
+        catch (err) {
+            console.error('[Redis] Error clearing user:', err);
         }
     }
 };
