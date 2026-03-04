@@ -555,7 +555,10 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
   const phone = toDigitsPhone(phoneRaw);
   const mcpReady = await ensureReservasMcpReady();
   if (!mcpReady) return [];
-  const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
+  const result = await Promise.race([
+    reservasMcp.callTool('query_reservations', { clientPhone: phone }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('query_reservations timeout')), 15000))
+  ]) as any;
   const payload = parseMcpToolText(result);
   const all = extractReservationsList(payload);
   return all
