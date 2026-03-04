@@ -551,14 +551,39 @@ function extractReservationsList(payload: any): any[] {
   return [];
 }
 
+async function callReservasToolWithTimeout(
+  tool: string,
+  args: Record<string, any>,
+  opts?: { timeoutMs?: number; retries?: number; retryDelayMs?: number }
+): Promise<any> {
+  const timeoutMs = opts?.timeoutMs ?? 15000;
+  const retries = opts?.retries ?? 0;
+  const retryDelayMs = opts?.retryDelayMs ?? 500;
+  let lastErr: any;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await Promise.race([
+        reservasMcp.callTool(tool, args),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${tool} timeout`)), timeoutMs))
+      ]);
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < retries) await new Promise((r) => setTimeout(r, retryDelayMs));
+    }
+  }
+  throw lastErr;
+}
+
 async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservation[]> {
   const phone = toDigitsPhone(phoneRaw);
   const mcpReady = await ensureReservasMcpReady();
   if (!mcpReady) return [];
-  const result = await Promise.race([
-    reservasMcp.callTool('query_reservations', { clientPhone: phone }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('query_reservations timeout')), 15000))
-  ]) as any;
+  const result = await callReservasToolWithTimeout(
+    'query_reservations',
+    { clientPhone: phone },
+    { timeoutMs: 15000, retries: 1, retryDelayMs: 600 }
+  );
   const payload = parseMcpToolText(result);
   const all = extractReservationsList(payload);
   return all
@@ -593,7 +618,11 @@ async function fetchActiveReservationsWithRetry(phoneRaw: string): Promise<Activ
 }
 
 async function findReservationMatchWithId(input: ReservationMatchInput): Promise<{ id?: string; code?: string; status?: string } | null> {
-  const verifyResult = await reservasMcp.callTool('query_reservations', { clientPhone: input.phone });
+  const verifyResult = await callReservasToolWithTimeout(
+    'query_reservations',
+    { clientPhone: input.phone },
+    { timeoutMs: 12000, retries: 0 }
+  );
   const verifyPayload = parseMcpToolText(verifyResult);
   const items = extractReservationsList(verifyPayload);
   const matched = items.find((x: any) =>
@@ -663,7 +692,11 @@ async function queryReservationsDeterministic(from: string): Promise<{ ok: boole
     if (!mcpReady) {
       return { ok: false, message: 'Tive uma instabilidade para consultar suas reservas agora 😕' };
     }
-    const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
+    const result = await callReservasToolWithTimeout(
+      'query_reservations',
+      { clientPhone: phone },
+      { timeoutMs: 15000, retries: 1, retryDelayMs: 600 }
+    );
     const payload = parseMcpToolText(result);
     const all = extractReservationsList(payload);
 
@@ -756,13 +789,21 @@ async function createReservationDeterministic(from: string, state: UserState): P
 
     let createResult: any;
     try {
-      createResult = await reservasMcp.callTool('create_reservation', createArgs);
+      createResult = await callReservasToolWithTimeout(
+        'create_reservation',
+        createArgs,
+        { timeoutMs: 20000, retries: 1, retryDelayMs: 700 }
+      );
     } catch (err: any) {
       const msg = String(err?.message || '').toLowerCase();
       if (msg.includes('client') || msg.includes('cliente') || msg.includes('not found') || msg.includes('não encontrado')) {
         if (name) {
-          await reservasMcp.callTool('create_client', { name, phone });
-          createResult = await reservasMcp.callTool('create_reservation', createArgs);
+          await callReservasToolWithTimeout('create_client', { name, phone }, { timeoutMs: 12000, retries: 1 });
+          createResult = await callReservasToolWithTimeout(
+            'create_reservation',
+            createArgs,
+            { timeoutMs: 20000, retries: 1, retryDelayMs: 700 }
+          );
         } else {
           throw err;
         }
@@ -820,10 +861,10 @@ async function createReservationDeterministic(from: string, state: UserState): P
 
     if (previousReservationId) {
       try {
-        await reservasMcp.callTool('cancel_reservation', {
+        await callReservasToolWithTimeout('cancel_reservation', {
           reservationId: previousReservationId,
           reason: 'Alteração solicitada pelo cliente via WhatsApp'
-        });
+        }, { timeoutMs: 15000, retries: 1, retryDelayMs: 500 });
       } catch (cancelErr: any) {
         console.error('[ReservasDeterministic] cancel old reservation after alter failed:', cancelErr?.message || cancelErr);
       }
@@ -1406,10 +1447,10 @@ async function handleDeterministicCommand(
     try {
       const mcpReady = await ensureReservasMcpReady();
       if (!mcpReady) throw new Error('MCP not ready');
-      await reservasMcp.callTool('cancel_reservation', {
+      await callReservasToolWithTimeout('cancel_reservation', {
         reservationId,
         reason: 'Cancelamento solicitado pelo cliente via WhatsApp'
-      });
+      }, { timeoutMs: 15000, retries: 1, retryDelayMs: 500 });
       const code = state.reservation?.pending_cancellation_code || reservationId.substring(0, 8).toUpperCase();
       await sendWhatsAppText(from, `Reserva ${code} cancelada com sucesso. ✅`);
       state.reservation = undefined;
@@ -1448,10 +1489,10 @@ async function handleDeterministicCommand(
       if (!mcpReady) throw new Error('MCP not ready');
       for (const reservationId of ids) {
         try {
-          await reservasMcp.callTool('cancel_reservation', {
+          await callReservasToolWithTimeout('cancel_reservation', {
             reservationId,
             reason: 'Cancelamento em lote solicitado pelo cliente via WhatsApp'
-          });
+          }, { timeoutMs: 15000, retries: 1, retryDelayMs: 500 });
           cancelled += 1;
         } catch (err: any) {
           console.error('[ReservasDeterministic] cancel_all item failed:', reservationId, err?.message || err);
