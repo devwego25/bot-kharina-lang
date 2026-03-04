@@ -50,6 +50,7 @@ const userProcessingQueue = new Map<string, Promise<void>>();
 
 const INTERACTIVE_DEGRADED_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second between messages
+const GRAPH_API_TIMEOUT_MS = 8000;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 
 // Command sets
@@ -169,7 +170,8 @@ async function postGraphMessage(payload: any, label: string, retries = 2): Promi
   const httpsAgent = proxyUrl ? new SocksProxyAgent(proxyUrl) : undefined;
 
   const axiosConfig: any = {
-    headers: { Authorization: `Bearer ${config.whatsapp.token}` }
+    headers: { Authorization: `Bearer ${config.whatsapp.token}` },
+    timeout: GRAPH_API_TIMEOUT_MS
   };
   if (proxyUrl) {
     axiosConfig.httpsAgent = httpsAgent;
@@ -759,6 +761,10 @@ function enqueueUserJob(userId: string, job: () => Promise<void>) {
 async function processMessageInternal(message: any, value: any): Promise<void> {
   try {
     const from = message.from;
+    const totalStart = Date.now();
+    const logStep = (step: string, startedAt: number) => {
+      console.log(`[Perf][${from}] ${step}: ${Date.now() - startedAt}ms`);
+    };
     const contact = value?.contacts?.[0];
     const rawPushName = contact?.profile?.name || '';
     // Only treat as real name if it contains non-digit characters (not a phone number fallback)
@@ -804,13 +810,16 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     }
 
     // Check bot active
+    const botActiveStart = Date.now();
     const botActive = await chatwootService.checkBotActive(from);
+    logStep('checkBotActive', botActiveStart);
     if (!botActive) return;
-
-    await chatwootService.syncMessage(from, userName, text, 'incoming', { source: 'whatsapp' });
 
     // Send typing indicator
     sendTypingIndicator(from, message.id).catch(() => { });
+    chatwootService.syncMessage(from, userName, text, 'incoming', { source: 'whatsapp' }).catch((err) => {
+      console.error(`[Chatwoot] async incoming sync failed for ${from}:`, err?.message || err);
+    });
 
     // Prompt injection check
     if (isPromptInjection(text)) {
@@ -828,14 +837,20 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     }
 
     // Try deterministic commands first
+    const deterministicStart = Date.now();
     const handled = await handleDeterministicCommand(text, from, state);
+    logStep('handleDeterministicCommand', deterministicStart);
     if (handled) {
-      await chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' });
+      chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' }).catch((err) => {
+        console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+      });
+      logStep('total_handled_deterministic', totalStart);
       return;
     }
 
     // Call LangChain agent
     const sessionId = `whatsapp_${from}`;
+    const langchainStart = Date.now();
     const result = await langchainService.processMessage(sessionId, text, {
       phone: from,
       user_name: userNameForAgent,    // undefined when no push name → agent will ask
@@ -844,6 +859,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       preferred_city: state.preferred_city,
       reservation_state: state.reservation
     });
+    logStep('langchain.processMessage', langchainStart);
 
     // Handle UI actions from Python
     if (result.ui_action) {
@@ -901,16 +917,24 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
         default:
           if (result.response) {
             const safeResponse = sanitizeWhatsAppText(result.response);
+            const sendStart = Date.now();
             await sendWhatsAppText(from, safeResponse);
-            await chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' });
+            logStep('sendWhatsAppText(default_ui_action)', sendStart);
+            chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' }).catch((err) => {
+              console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+            });
           }
       }
     } else {
       // Regular text response
       if (result.response) {
         const safeResponse = sanitizeWhatsAppText(result.response);
+        const sendStart = Date.now();
         await sendWhatsAppText(from, safeResponse);
-        await chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' });
+        logStep('sendWhatsAppText(regular)', sendStart);
+        chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' }).catch((err) => {
+          console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+        });
       }
     }
 
@@ -924,6 +948,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     // Mark as interacted
     state.has_interacted = true;
     userStates.set(from, state);
+    logStep('total', totalStart);
 
   } catch (error) {
     console.error('[WhatsApp] Error processing message:', error);

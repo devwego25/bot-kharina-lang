@@ -47,7 +47,8 @@ app.use(express_1.default.urlencoded({ extended: true }));
 // ─── Health Check Endpoints ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
     const langchainHealthy = await langchain_1.langchainService.healthCheck();
-    res.status(langchainHealthy ? 200 : 503).json({
+    // Return 200 even if degraded to prevent task restart loops during startup
+    res.status(200).json({
         status: langchainHealthy ? 'healthy' : 'degraded',
         service: 'kharina-backend',
         langchain: langchainHealthy ? 'connected' : 'disconnected',

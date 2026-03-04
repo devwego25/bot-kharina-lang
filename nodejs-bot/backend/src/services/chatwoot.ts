@@ -6,6 +6,7 @@ export class ChatwootService {
     private accountId: string;
     private inboxId: string;
     private headers: any;
+    private client: any;
 
     constructor() {
         this.baseUrl = config.chatwoot.url?.replace(/\/$/, '') || '';
@@ -15,6 +16,9 @@ export class ChatwootService {
             'api_access_token': config.chatwoot.token,
             'Content-Type': 'application/json'
         };
+        this.client = axios.create({
+            timeout: 5000
+        });
     }
 
     /**
@@ -52,11 +56,7 @@ export class ChatwootService {
         try {
             // 1. Buscar contato
             const searchUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/search?q=${phone}`;
-            const searchResp = await axios.get(searchUrl, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            const searchResp = await this.client.get(searchUrl, { headers: this.headers });
             const searchData = searchResp.data as any;
             const contact = searchData.payload?.[0];
 
@@ -64,11 +64,7 @@ export class ChatwootService {
 
             // 2. Buscar conversas
             const convsUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/${contact.id}/conversations`;
-            const convsResp = await axios.get(convsUrl, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            const convsResp = await this.client.get(convsUrl, { headers: this.headers });
             const convsData = convsResp.data as any;
             const conversations = convsData.payload;
 
@@ -120,11 +116,7 @@ export class ChatwootService {
                 if (updates.team_id) assignPayload.team_id = updates.team_id;
                 if (updates.assignee_id) assignPayload.assignee_id = updates.assignee_id;
 
-                await axios.post(assignUrl, assignPayload, {
-                    headers: this.headers,
-                    // @ts-expect-error
-                    proxy: false
-                });
+                await this.client.post(assignUrl, assignPayload, { headers: this.headers });
                 console.log(`[Chatwoot] Conversation ${conversationId} assigned:`, assignPayload);
 
                 // Remove from updates object to avoid redundant/failed PATCH
@@ -136,11 +128,7 @@ export class ChatwootService {
             // Only verify if there are keys remaining
             if (Object.keys(updates).length > 0) {
                 const url = `${this.baseUrl}/api/v1/accounts/${this.accountId}/conversations/${conversationId}`;
-                await axios.patch(url, updates, {
-                    headers: this.headers,
-                    // @ts-expect-error
-                    proxy: false
-                });
+                await this.client.patch(url, updates, { headers: this.headers });
                 console.log(`[Chatwoot] Conversation ${conversationId} updated (status/meta):`, updates);
             }
 
@@ -155,11 +143,7 @@ export class ChatwootService {
         try {
             // 1. Buscar contato pelo telefone
             const searchUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/search?q=${phone}`;
-            const searchResp = await axios.get(searchUrl, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            const searchResp = await this.client.get(searchUrl, { headers: this.headers });
             const searchData = searchResp.data as any;
 
             if (searchData.payload.length > 0) {
@@ -169,16 +153,12 @@ export class ChatwootService {
             // 2. Criar se não existir
             console.log(`[Chatwoot] Creating contact for ${phone}...`);
             const createUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts`;
-            const createResp = await axios.post(createUrl, {
+            const createResp = await this.client.post(createUrl, {
                 inbox_id: this.inboxId,
                 name: name || phone,
                 phone_number: `+${phone.replace(/\+/g, '')}`, // Formatar com +
                 custom_attributes: { whatsapp_id: phone }
-            }, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            }, { headers: this.headers });
             const createData = createResp.data as any;
             // Chatwoot v3+ wrapper check
             const contactId = createData.payload?.contact?.id || createData.contact?.id || createData.id;
@@ -198,11 +178,7 @@ export class ChatwootService {
         try {
             // 1. Buscar conversas abertas do contato
             const convsUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/${contactId}/conversations`;
-            const convsResp = await axios.get(convsUrl, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            const convsResp = await this.client.get(convsUrl, { headers: this.headers });
             const convsData = convsResp.data as any;
 
             const openConv = convsData.payload.find((c: any) => c.status !== 'resolved');
@@ -214,16 +190,12 @@ export class ChatwootService {
             const sourceId = phone.replace(/\D/g, '');
             console.log(`[Chatwoot] Creating conversation for contact ${contactId} with source_id: ${sourceId}`);
             const createUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/conversations`;
-            const createResp = await axios.post(createUrl, {
+            const createResp = await this.client.post(createUrl, {
                 source_id: sourceId, // Usar o número limpo (apenas dígitos)
                 inbox_id: this.inboxId,
                 contact_id: contactId,
                 status: 'pending' // Criar como pendente para o bot continuar ativo
-            }, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            }, { headers: this.headers });
             const createData = createResp.data as any;
             // Chatwoot v3+ wrapper check
             const conversationId = createData.payload?.id || createData.id;
@@ -242,16 +214,12 @@ export class ChatwootService {
     private async sendMessage(conversationId: number, content: string, type: 'incoming' | 'outgoing', attributes: any = {}, isPrivate: boolean = false) {
         try {
             const url = `${this.baseUrl}/api/v1/accounts/${this.accountId}/conversations/${conversationId}/messages`;
-            await axios.post(url, {
+            await this.client.post(url, {
                 content: content,
                 message_type: type,
                 private: isPrivate,
                 content_attributes: attributes
-            }, {
-                headers: this.headers,
-                // @ts-expect-error
-                proxy: false
-            });
+            }, { headers: this.headers });
 
             console.log(`[Chatwoot] Message synced (${type}${isPrivate ? ' PRIVATE' : ''}) to conversation ${conversationId}`);
         } catch (err: any) {

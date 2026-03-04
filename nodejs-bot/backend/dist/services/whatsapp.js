@@ -28,6 +28,7 @@ const interactiveDegradedUntil = new Map();
 const userProcessingQueue = new Map();
 const INTERACTIVE_DEGRADED_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second between messages
+const GRAPH_API_TIMEOUT_MS = 8000;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery']);
@@ -131,7 +132,8 @@ async function postGraphMessage(payload, label, retries = 2) {
     const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
     const httpsAgent = proxyUrl ? new socks_proxy_agent_1.SocksProxyAgent(proxyUrl) : undefined;
     const axiosConfig = {
-        headers: { Authorization: `Bearer ${env_1.config.whatsapp.token}` }
+        headers: { Authorization: `Bearer ${env_1.config.whatsapp.token}` },
+        timeout: GRAPH_API_TIMEOUT_MS
     };
     if (proxyUrl) {
         axiosConfig.httpsAgent = httpsAgent;
@@ -195,9 +197,11 @@ async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText)
     }
     try {
         await postGraphMessage(menuPayload, label, 2);
+        console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
         return true;
     }
-    catch {
+    catch (err) {
+        console.error(`[WhatsApp] ${label} failed:`, err.message);
         interactiveDegradedUntil.set(to, now + INTERACTIVE_DEGRADED_WINDOW_MS);
         if (fallbackText)
             await sendWhatsAppText(to, fallbackText);
@@ -649,8 +653,16 @@ function enqueueUserJob(userId, job) {
 async function processMessageInternal(message, value) {
     try {
         const from = message.from;
+        const totalStart = Date.now();
+        const logStep = (step, startedAt) => {
+            console.log(`[Perf][${from}] ${step}: ${Date.now() - startedAt}ms`);
+        };
         const contact = value?.contacts?.[0];
-        const userName = contact?.profile?.name || from;
+        const rawPushName = contact?.profile?.name || '';
+        // Only treat as real name if it contains non-digit characters (not a phone number fallback)
+        const hasRealName = rawPushName.trim().length > 0 && !/^[\d+\s\-().]+$/.test(rawPushName.trim());
+        const userName = hasRealName ? rawPushName : from; // for Chatwoot / logs
+        const userNameForAgent = hasRealName ? rawPushName : undefined; // undefined = agent will ask
         // Extract text
         let text = '';
         if (message.type === 'text') {
@@ -685,12 +697,16 @@ async function processMessageInternal(message, value) {
             return;
         }
         // Check bot active
+        const botActiveStart = Date.now();
         const botActive = await chatwoot_1.chatwootService.checkBotActive(from);
+        logStep('checkBotActive', botActiveStart);
         if (!botActive)
             return;
-        await chatwoot_1.chatwootService.syncMessage(from, userName, text, 'incoming', { source: 'whatsapp' });
         // Send typing indicator
         sendTypingIndicator(from, message.id).catch(() => { });
+        chatwoot_1.chatwootService.syncMessage(from, userName, text, 'incoming', { source: 'whatsapp' }).catch((err) => {
+            console.error(`[Chatwoot] async incoming sync failed for ${from}:`, err?.message || err);
+        });
         // Prompt injection check
         if (isPromptInjection(text)) {
             const msg = 'Não posso seguir esse tipo de instrução. Posso te ajudar com cardápio, reservas ou delivery.';
@@ -699,29 +715,51 @@ async function processMessageInternal(message, value) {
             return;
         }
         // Get/create user state
-        let state = userStates.get(from);
-        if (!state) {
-            state = {};
+        let state = userStates.get(from) ?? {};
+        if (!userStates.has(from)) {
             userStates.set(from, state);
         }
         // Try deterministic commands first
+        const deterministicStart = Date.now();
         const handled = await handleDeterministicCommand(text, from, state);
+        logStep('handleDeterministicCommand', deterministicStart);
         if (handled) {
-            await chatwoot_1.chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' });
+            chatwoot_1.chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' }).catch((err) => {
+                console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+            });
+            logStep('total_handled_deterministic', totalStart);
             return;
         }
         // Call LangChain agent
         const sessionId = `whatsapp_${from}`;
+        const langchainStart = Date.now();
         const result = await langchain_1.langchainService.processMessage(sessionId, text, {
             phone: from,
-            user_name: userName,
+            user_name: userNameForAgent, // undefined when no push name → agent will ask
             preferred_store_id: state.preferred_store_id,
             preferred_unit_name: state.preferred_unit_name,
             preferred_city: state.preferred_city,
             reservation_state: state.reservation
         });
+        logStep('langchain.processMessage', langchainStart);
         // Handle UI actions from Python
         if (result.ui_action) {
+            // First, apply any reservation_state updates from Python agent
+            if (result.state_updates?.reservation_state) {
+                const rs = result.state_updates.reservation_state;
+                state.reservation = {
+                    ...(state.reservation || {}),
+                    name: rs.name ?? state.reservation?.name,
+                    date_text: rs.date_text ?? state.reservation?.date_text,
+                    time_text: rs.time_text ?? state.reservation?.time_text,
+                    people: rs.people ?? state.reservation?.people,
+                    kids: rs.kids ?? state.reservation?.kids,
+                    contact_phone: rs.contact_phone ?? state.reservation?.contact_phone,
+                    phone_confirmed: rs.phone_confirmed ?? state.reservation?.phone_confirmed,
+                };
+                userStates.set(from, state);
+                console.log(`[State] Reservation state updated from Python:`, state.reservation);
+            }
             switch (result.ui_action.type) {
                 case 'show_confirmation_menu':
                     await sendConfirmationMenu(from, state);
@@ -735,6 +773,15 @@ async function processMessageInternal(message, value) {
                     state.reservation = undefined;
                     userStates.set(from, state);
                     break;
+                case 'show_cardapio_menu':
+                    await sendCitiesMenu(from);
+                    break;
+                case 'show_delivery_menu':
+                    await sendDeliveryCitiesMenu(from);
+                    break;
+                case 'show_unidades_menu':
+                    await sendUnidadesMenu(from);
+                    break;
                 case 'show_cancel_confirmation':
                     const resId = result.ui_action.data?.reservation_id;
                     if (resId) {
@@ -744,8 +791,12 @@ async function processMessageInternal(message, value) {
                 default:
                     if (result.response) {
                         const safeResponse = sanitizeWhatsAppText(result.response);
+                        const sendStart = Date.now();
                         await sendWhatsAppText(from, safeResponse);
-                        await chatwoot_1.chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' });
+                        logStep('sendWhatsAppText(default_ui_action)', sendStart);
+                        chatwoot_1.chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' }).catch((err) => {
+                            console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+                        });
                     }
             }
         }
@@ -753,18 +804,24 @@ async function processMessageInternal(message, value) {
             // Regular text response
             if (result.response) {
                 const safeResponse = sanitizeWhatsAppText(result.response);
+                const sendStart = Date.now();
                 await sendWhatsAppText(from, safeResponse);
-                await chatwoot_1.chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' });
+                logStep('sendWhatsAppText(regular)', sendStart);
+                chatwoot_1.chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' }).catch((err) => {
+                    console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+                });
             }
         }
-        // Update state
+        // Update state from any remaining state_updates keys
         if (result.state_updates) {
-            state = { ...state, ...result.state_updates };
+            const { reservation_state, ...rest } = result.state_updates;
+            state = { ...state, ...rest };
             userStates.set(from, state);
         }
         // Mark as interacted
         state.has_interacted = true;
         userStates.set(from, state);
+        logStep('total', totalStart);
     }
     catch (error) {
         console.error('[WhatsApp] Error processing message:', error);
