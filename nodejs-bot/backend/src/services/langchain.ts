@@ -79,18 +79,33 @@ export class LangChainService {
 
       return response.data;
     } catch (error: any) {
-      if (error && typeof error === 'object' && 'response' in error) {
-        console.error('[LangChain] HTTP Error:', error.response?.status, error.response?.data);
+      const isAxiosErr = Boolean(error?.isAxiosError);
+      const status = error?.response?.status;
+      const responseData = error?.response?.data;
+      const code = error?.code;
+      const message = error?.message || 'Unknown error';
+
+      if (isAxiosErr) {
+        console.error('[LangChain] HTTP Error:', { status, code, message, responseData });
         return {
           response: "Desculpe, tive um probleminha técnico aqui. 😅 Pode repetir por favor?",
           intent: "error",
           tool_called: null,
           ui_action: null,
           state_updates: null,
-          error: error.message
+          error: message
         };
       }
-      throw error;
+
+      console.error('[LangChain] Non-HTTP Error:', error);
+      return {
+        response: "Desculpe, tive um probleminha técnico aqui. 😅 Pode repetir por favor?",
+        intent: "error",
+        tool_called: null,
+        ui_action: null,
+        state_updates: null,
+        error: message
+      };
     }
   }
 
