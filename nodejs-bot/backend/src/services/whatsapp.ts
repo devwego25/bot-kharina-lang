@@ -589,10 +589,31 @@ async function createReservationDeterministic(from: string, state: UserState): P
     }
 
     const displayCode = displayReservationCode(picked);
-    if (!picked.id && !displayCode) {
+    if (!picked.id) {
+      const alertMsg = [
+        'ALERTA RESERVA: criação sem ID confirmado.',
+        `Telefone: +${phone}`,
+        `Unidade: ${unitName} (${storeId})`,
+        `Data/Hora: ${date} ${time}`,
+        `Pessoas: ${people}`,
+        `Crianças: ${kids}`,
+        `Nome: ${name || 'N/A'}`,
+        notes ? `Obs: ${notes}` : '',
+        'Ação: validar no MCP/Reservas e retornar ao cliente.'
+      ].filter(Boolean).join('\n');
+      chatwootService.syncMessage(
+        from,
+        name || from,
+        alertMsg,
+        'outgoing',
+        { source: 'system', kind: 'reservation_alert', reason: 'missing_reservation_id' },
+        true
+      ).catch((err) => {
+        console.error('[Chatwoot] reservation alert failed:', err?.message || err);
+      });
       return {
         ok: false,
-        message: 'Não consegui validar o código da reserva no retorno do sistema. Vou manter os dados e tentar novamente.'
+        message: 'Tive uma instabilidade para confirmar sua reserva com segurança agora 😕\nPor favor, tente novamente em alguns minutos. Se preferir, nosso time já foi alertado para verificar por aqui.'
       };
     }
 
@@ -627,11 +648,33 @@ async function createReservationDeterministic(from: string, state: UserState): P
     return { ok: true, message: lines.join('\n') };
   } catch (err: any) {
     console.error('[ReservasDeterministic] create_reservation failed:', err?.message || err);
+    const rr = state.reservation || {};
+    const alertMsg = [
+      'ALERTA RESERVA: falha técnica na criação.',
+      `Telefone: +${toDigitsPhone(rr.contact_phone || from)}`,
+      `Unidade: ${state.preferred_unit_name || 'N/A'} (${state.preferred_store_id || 'N/A'})`,
+      `Data/Hora: ${normalizeIsoDate(rr.date_text || '') || 'N/A'} ${normalizeTime(rr.time_text || '') || ''}`.trim(),
+      `Pessoas: ${rr.people ?? 'N/A'}`,
+      `Crianças: ${rr.kids ?? 'N/A'}`,
+      `Nome: ${rr.name || from}`,
+      `Erro: ${String(err?.message || err || 'unknown')}`,
+      'Ação: verificar no MCP/Reservas e acompanhar cliente.'
+    ].join('\n');
+    chatwootService.syncMessage(
+      from,
+      rr.name || from,
+      alertMsg,
+      'outgoing',
+      { source: 'system', kind: 'reservation_alert', reason: 'create_reservation_exception' },
+      true
+    ).catch((cwErr) => {
+      console.error('[Chatwoot] reservation alert failed:', cwErr?.message || cwErr);
+    });
     if (state.reservation) state.reservation.awaiting_confirmation = true;
     userStates.set(from, state);
     return {
       ok: false,
-      message: 'Tive uma instabilidade para concluir sua reserva agora 😕\nVou reenviar a confirmação para tentarmos novamente.'
+      message: 'Tive uma instabilidade para concluir sua reserva agora 😕\nPor favor, tente novamente em alguns minutos. Nosso time também foi alertado para verificar.'
     };
   }
 }
@@ -1304,7 +1347,10 @@ async function handleDeterministicCommand(
     const done = await createReservationDeterministic(from, state);
     await sendWhatsAppText(from, done.message);
     if (!done.ok) {
-      await sendConfirmationMenu(from, state);
+      const suggestWait = done.message.toLowerCase().includes('alguns minutos');
+      if (!suggestWait) {
+        await sendConfirmationMenu(from, state);
+      }
     }
     return true;
   }
