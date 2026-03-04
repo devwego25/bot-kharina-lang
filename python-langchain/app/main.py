@@ -2,6 +2,14 @@
 
 import logging
 import sys
+import os
+# Fix for httpx not supporting socks5h scheme
+# Normalize it to socks5:// which is understood by httpx[socks]
+for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+    val = os.environ.get(env_var)
+    if val and val.startswith("socks5h://"):
+        os.environ[env_var] = val.replace("socks5h://", "socks5://")
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
