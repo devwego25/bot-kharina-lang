@@ -378,35 +378,8 @@ async function buildCardapioMessage(cardapioCommand: string): Promise<string> {
     saopaulo: 'https://cardapio.kharina.com.br/saopaulo'
   };
 
-  if (city === 'curitiba') {
-    const unitConfigs = [
-      { label: 'Água Verde', key: 'link_cardapio_curitiba_agua_verde' },
-      { label: 'Batel', key: 'link_cardapio_curitiba_batel' },
-      { label: 'Portão', key: 'link_cardapio_curitiba_portao' },
-      { label: 'Cabral', key: 'link_cardapio_curitiba_cabral' },
-      { label: 'Jardim Botânico', key: 'link_cardapio_curitiba_botanico' }
-    ];
-
-    const resolved: Array<{ label: string; url: string }> = [];
-    for (const unit of unitConfigs) {
-      const link = await db.getConfig(unit.key);
-      resolved.push({ label: unit.label, url: link || baseMap.curitiba });
-    }
-
-    const uniqueUrls = new Set(resolved.map((x) => x.url));
-    if (uniqueUrls.size === 1) {
-      return `Perfeito! Aqui está o cardápio de Curitiba 🍽️\n👉 ${resolved[0].url}`;
-    }
-
-    const lines = [
-      'Perfeito! Aqui estão os cardápios de Curitiba 🍽️',
-      '',
-      ...resolved.map((x) => `• ${x.label}: ${x.url}`)
-    ];
-    return lines.join('\n');
-  }
-
   const cityLabelMap: Record<string, string> = {
+    curitiba: 'Curitiba',
     londrina: 'Londrina',
     saopaulo: 'São Paulo'
   };
