@@ -271,6 +271,26 @@ function extractStandalonePeople(text: string): number | null {
   return n;
 }
 
+function extractAdultsDelta(text: string): number | null {
+  const t = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (!t) return null;
+
+  if (/\bmais\s+(um|1)\s+casal\b/.test(t)) return 2;
+
+  const casais = t.match(/\bmais\s+(\d+)\s+casais\b/);
+  if (casais) return Number(casais[1]) * 2;
+
+  const adultos =
+    t.match(/\bmais\s+(\d+)\s+(adulto|adultos|pessoa|pessoas)\b/) ||
+    t.match(/\bmais\s+(um|uma)\s+(adulto|pessoa)\b/);
+  if (!adultos) return null;
+  const raw = adultos[1];
+  return raw === 'um' || raw === 'uma' ? 1 : Number(raw);
+}
+
 function sanitizeWhatsAppText(text: string): string {
   if (!text) return text;
   return text
@@ -498,6 +518,7 @@ type ActiveReservation = {
   date: string;
   time: string;
   people: number;
+  kids?: number;
   status: string;
 };
 
@@ -534,6 +555,7 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
       date: String(x?.date || ''),
       time: normalizeTime(String(x?.time || '')),
       people: Number(x?.numberOfPeople ?? x?.people ?? 0),
+      kids: x?.kids !== undefined && x?.kids !== null ? Number(x.kids) : undefined,
       status: statusLabel(x?.status)
     }))
     .filter((x: ActiveReservation) => x.reservationId);
@@ -1464,6 +1486,12 @@ async function handleDeterministicCommand(
       ...(state.reservation || {}),
       phone_confirmed: true,
       contact_phone: from,
+      date_text: selected.date || state.reservation?.date_text,
+      time_text: selected.time || state.reservation?.time_text,
+      kids: selected.kids ?? state.reservation?.kids,
+      people: selected.kids !== undefined
+        ? Math.max(0, selected.people - Number(selected.kids || 0))
+        : (state.reservation?.people ?? selected.people),
       pending_change_source_id: selected.reservationId,
       pending_change_source_code: selected.code,
       awaiting_confirmation: false
@@ -1682,6 +1710,12 @@ async function handleDeterministicCommand(
   // Deterministic slot-filling while in active reservation flow
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
     const extracted = parseReservationDetails(text);
+    if (!extracted.people) {
+      const adultsDelta = extractAdultsDelta(text);
+      if (adultsDelta && state.reservation?.people) {
+        extracted.people = Number(state.reservation.people) + adultsDelta;
+      }
+    }
     // If only people is missing, accept "4" style answers.
     if (!extracted.people && !state.reservation?.people) {
       const onlyPeople = extractStandalonePeople(text);
