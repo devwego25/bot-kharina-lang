@@ -592,7 +592,8 @@ function isInActiveFlow(state: UserState | undefined): boolean {
 async function handleDeterministicCommand(
   text: string,
   from: string,
-  state: UserState
+  state: UserState,
+  profileName?: string
 ): Promise<boolean> {
   const normalized = text.trim().toLowerCase();
   const isGreeting = GREETING_COMMANDS.has(normalized);
@@ -766,6 +767,12 @@ async function handleDeterministicCommand(
     state.reservation = state.reservation || {};
     state.reservation.phone_confirmed = true;
     state.reservation.contact_phone = from;
+    if (!state.reservation.name) {
+      const contactName = String(profileName || '').trim();
+      if (contactName && !/^[\d+\s\-().]+$/.test(contactName)) {
+        state.reservation.name = contactName;
+      }
+    }
     userStates.set(from, state);
 
     const msg = `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nMe conta: quantas pessoas e para quando?`;
@@ -813,6 +820,7 @@ async function handleDeterministicCommand(
       if (!state.reservation.people) missing.push('quantas pessoas');
       if (!state.reservation.date_text) missing.push('a data');
       if (!state.reservation.time_text) missing.push('o horário');
+      if (state.reservation.kids === undefined) missing.push('se terá crianças (e quantas)');
 
       if (missing.length > 0) {
         await sendWhatsAppText(from, `Perfeito! ✅ Agora me confirma ${missing.join(' e ')}.`);
@@ -1005,7 +1013,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // Try deterministic commands first
     const deterministicStart = Date.now();
-    const handled = await handleDeterministicCommand(text, from, state);
+    const handled = await handleDeterministicCommand(text, from, state, rawPushName);
     logStep('handleDeterministicCommand', deterministicStart);
     if (handled) {
       chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' }).catch((err) => {
