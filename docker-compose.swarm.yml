@@ -22,7 +22,7 @@ services:
       - LOG_LEVEL=INFO
     networks:
       - kharina-network
-      - cardapio_default  # To reach cardapio_app
+      - KharinaNet  # To reach cardapio_app
     deploy:
       replicas: 1
       restart_policy:
@@ -58,7 +58,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
-      - LANGCHAIN_URL=http://langchain:8000
+      - LANGCHAIN_URL=http://kharina-bot-v2_langchain:8000
       - CHATWOOT_URL=${CHATWOOT_URL}
       - CHATWOOT_TOKEN=${CHATWOOT_TOKEN}
       - CHATWOOT_ACCOUNT_ID=${CHATWOOT_ACCOUNT_ID}
@@ -69,7 +69,7 @@ services:
       - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
     networks:
       - kharina-network
-      - cardapio_default
+      - KharinaNet
       - traefik-public
     deploy:
       replicas: 1
@@ -79,10 +79,10 @@ services:
         max_attempts: 3
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.kharina-bot.rule=Host(`chatbot.kharina.com.br`)"
-        - "traefik.http.routers.kharina-bot.entrypoints=websecure"
-        - "traefik.http.routers.kharina-bot.tls.certresolver=letsencrypt"
-        - "traefik.http.services.kharina-bot.loadbalancer.server.port=3000"
+        - "traefik.http.routers.kharina-bot-v2.rule=Host(`chatbot.kharina.com.br`)"
+        - "traefik.http.routers.kharina-bot-v2.entrypoints=websecure"
+        - "traefik.http.routers.kharina-bot-v2.tls.certresolver=letsencrypt"
+        - "traefik.http.services.kharina-bot-v2.loadbalancer.server.port=3000"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
       interval: 30s
@@ -111,7 +111,7 @@ networks:
   kharina-network:
     driver: overlay
     attachable: true
-  cardapio_default:
+  KharinaNet:
     external: true
   traefik-public:
     external: true
