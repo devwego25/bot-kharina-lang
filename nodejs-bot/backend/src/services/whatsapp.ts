@@ -599,7 +599,7 @@ async function handleDeterministicCommand(
     normalized.includes('reservar mesa');
   const timeOnlyPattern =
     /\bhoje\b/.test(normalized) &&
-    /(\d{1,2})\s*(h|:\d{2})/.test(normalized) &&
+    /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
     !/\b\d+\s*(pessoa|pessoas|adulto|adultos)\b/.test(normalized);
 
   // Main menu
@@ -779,13 +779,8 @@ async function handleDeterministicCommand(
 
   // Reservation flow guard: user sent only date/time (without people count)
   if (timeOnlyPattern && isInActiveFlow(state)) {
-    state.reservation = state.reservation || {};
-    const hm = normalized.match(/(\d{1,2})\s*(?::\s*(\d{2})|h)?/);
-    if (hm) {
-      const hh = hm[1].padStart(2, '0');
-      const mm = (hm[2] || '00').padStart(2, '0');
-      state.reservation.time_text = `${hh}:${mm}`;
-    }
+    const extracted = parseReservationDetails(text);
+    state.reservation = { ...(state.reservation || {}), ...extracted };
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Perfeito! ✅ Agora me diz *quantas pessoas* serão na reserva.');
     return true;
