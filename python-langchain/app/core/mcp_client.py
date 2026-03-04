@@ -152,46 +152,73 @@ class McpClient:
             }
         }
 
+        max_attempts = 2 if tool_name in {"create_reservation", "check_availability"} else 1
+        request_timeout = (
+            65.0 if tool_name == "create_reservation"
+            else 45.0 if tool_name == "check_availability"
+            else self.timeout
+        )
+
         try:
-            logger.info(f"Calling tool '{tool_name}' on {self.name} with args: {arguments}")
-
-            response = await self._client.post(
-                self.url,
-                json=payload,
-                headers=self._get_headers()
-            )
-
-            # If session expired, reinitialize and retry
-            if response.status_code in (400, 404) and self.transport == "streamable":
-                logger.warning(f"MCP session expired for {self.name}, reinitializing...")
-                self.ready = False
-                self._session_id = None
-                await self.connect()
-                response = await self._client.post(
-                    self.url,
-                    json=payload,
-                    headers=self._get_headers()
+            for attempt in range(1, max_attempts + 1):
+                logger.info(
+                    "Calling tool '%s' on %s (attempt %d/%d, timeout=%ss) with args: %s",
+                    tool_name, self.name, attempt, max_attempts, request_timeout, arguments
                 )
 
-            response.raise_for_status()
+                try:
+                    response = await self._client.post(
+                        self.url,
+                        json=payload,
+                        headers=self._get_headers(),
+                        timeout=request_timeout
+                    )
+                except httpx.ReadTimeout:
+                    logger.warning(
+                        "ReadTimeout calling tool '%s' on %s (attempt %d/%d)",
+                        tool_name, self.name, attempt, max_attempts
+                    )
+                    if attempt >= max_attempts:
+                        raise
+                    self.ready = False
+                    self._session_id = None
+                    await self.connect()
+                    continue
 
-            # Parse SSE response: extract data line
-            result = self._parse_sse_or_json(response.text)
+                # If session expired, reinitialize and retry once in same attempt
+                if response.status_code in (400, 404) and self.transport == "streamable":
+                    logger.warning(f"MCP session expired for {self.name}, reinitializing...")
+                    self.ready = False
+                    self._session_id = None
+                    await self.connect()
+                    response = await self._client.post(
+                        self.url,
+                        json=payload,
+                        headers=self._get_headers(),
+                        timeout=request_timeout
+                    )
 
-            # Extract tool result content
-            if isinstance(result, dict):
-                if "result" in result:
-                    inner = result["result"]
-                    # MCP tools/call result: {"content": [{"type": "text", "text": "..."}]}
-                    if isinstance(inner, dict) and "content" in inner:
-                        content = inner["content"]
-                        if isinstance(content, list) and content:
-                            return content[0].get("text", json.dumps(inner))
-                    return json.dumps(inner)
-                elif "error" in result:
-                    raise RuntimeError(f"MCP tool error: {result['error']}")
+                response.raise_for_status()
 
-            return json.dumps(result)
+                # Parse SSE response: extract data line
+                result = self._parse_sse_or_json(response.text)
+
+                # Extract tool result content
+                if isinstance(result, dict):
+                    if "result" in result:
+                        inner = result["result"]
+                        # MCP tools/call result: {"content": [{"type": "text", "text": "..."}]}
+                        if isinstance(inner, dict) and "content" in inner:
+                            content = inner["content"]
+                            if isinstance(content, list) and content:
+                                return content[0].get("text", json.dumps(inner))
+                        return json.dumps(inner)
+                    if "error" in result:
+                        raise RuntimeError(f"MCP tool error: {result['error']}")
+
+                return json.dumps(result)
+
+            raise RuntimeError(f"Failed to call tool {tool_name} after retries")
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error calling tool {tool_name}: {e.response.status_code} - {e.response.text[:500]}")
