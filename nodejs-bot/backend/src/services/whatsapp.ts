@@ -86,6 +86,7 @@ function formatBrazilPhone(raw: string): string {
 function sanitizeWhatsAppText(text: string): string {
   if (!text) return text;
   return text
+    .replace(/\*\*/g, '*')
     .replace(/```/g, '')
     .replace(/\s*\(\d{4}-\d{2}-\d{2}\)/g, '')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '$2')
