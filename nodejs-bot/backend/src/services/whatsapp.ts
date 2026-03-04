@@ -900,6 +900,28 @@ export async function sendWhatsAppText(to: string, text: string): Promise<void> 
   console.log(`[WhatsApp] Sent to ${to}: "${text.substring(0, 80)}..."`);
 }
 
+async function sendWhatsAppSticker(to: string, stickerMediaIdOrLink: string): Promise<void> {
+  const value = String(stickerMediaIdOrLink || '').trim();
+  if (!value) return;
+
+  const sticker: Record<string, string> = value.startsWith('http://') || value.startsWith('https://')
+    ? { link: value }
+    : { id: value };
+
+  try {
+    await postGraphMessage({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'sticker',
+      sticker
+    }, 'send_sticker', 1);
+    console.log(`[WhatsApp] Sticker sent to ${to}`);
+  } catch (err: any) {
+    console.error('[WhatsApp] Failed to send sticker:', err?.message || err);
+  }
+}
+
 async function sendTypingIndicator(to: string, messageId: string): Promise<void> {
   try {
     await postGraphMessage({
@@ -948,6 +970,11 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
   if (lastHash === menuHash) {
     console.log(`[Menu] Skipping duplicate main menu for ${to}`);
     return;
+  }
+
+  if (!compact) {
+    const introSticker = await db.getConfig('intro_sticker_media');
+    if (introSticker) await sendWhatsAppSticker(to, introSticker);
   }
 
   const payload = {
