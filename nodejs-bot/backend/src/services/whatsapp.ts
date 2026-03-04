@@ -442,6 +442,14 @@ function statusLabel(raw: any): string {
   return map[v] || String(raw || '');
 }
 
+function statusEmoji(raw: any): string {
+  const v = String(raw || '').toLowerCase();
+  if (v === 'cancelled' || v === 'canceled') return '❌';
+  if (v === 'waiting' || v === 'pending') return '⏳';
+  if (v === 'confirmed') return '✅';
+  return 'ℹ️';
+}
+
 async function buildCardapioMessage(cardapioCommand: string): Promise<string> {
   const city = cardapioCommand.replace('cardapio_', '');
   const baseMap: Record<string, string> = {
@@ -616,7 +624,7 @@ async function queryReservationsDeterministic(from: string): Promise<{ ok: boole
         `📅 Data: ${toBrDate(r?.date || '')}\n` +
         `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
         `👥 Total de pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
-        `✅ Status: ${statusLabel(r?.status)}`
+        `${statusEmoji(r?.status)} Status: ${statusLabel(r?.status)}`
       );
     });
     const hasActive = all.some((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'));
@@ -679,7 +687,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
         `👶 Crianças: ${kids}`,
         `👥 Total: ${totalPeople}`,
         recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : `🆔 ID da reserva: ${preExisting.id}`,
-        recoveredStatus ? `✅ Status: ${recoveredStatus}` : ''
+        recoveredStatus ? `${statusEmoji(preExisting.status)} Status: ${recoveredStatus}` : ''
       ].filter(Boolean);
       state.reservation = undefined;
       userStates.set(from, state);
@@ -770,7 +778,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `👥 Total: ${totalPeople}`,
       displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
       previousReservationCode ? `🔁 Alteração concluída (reserva anterior: ${previousReservationCode}).` : '',
-      status ? `✅ Status: ${status}` : ''
+      status ? `${statusEmoji(picked.status)} Status: ${status}` : ''
     ].filter(Boolean);
 
     state.reservation = undefined;
