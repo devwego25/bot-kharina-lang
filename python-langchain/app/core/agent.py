@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime
+from functools import lru_cache
 from typing import Any, Dict
 
 from langchain.agents import create_openai_tools_agent, AgentExecutor
@@ -178,6 +179,7 @@ def create_kha_agent():
     return agent
 
 
+@lru_cache(maxsize=1)
 def get_agent_executor() -> AgentExecutor:
     """Get configured agent executor."""
     agent = create_kha_agent()
