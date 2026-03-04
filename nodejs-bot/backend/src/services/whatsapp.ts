@@ -256,6 +256,19 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   return updates;
 }
 
+function extractStandalonePeople(text: string): number | null {
+  const t = String(text || '').toLowerCase().trim();
+  if (!t) return null;
+  // Ignore obvious date/time-only messages
+  if (/\b(\d{1,2})[:h](\d{2})\b/.test(t) || /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(t)) return null;
+  if (/\b(crian|hora|horas|h|amanh|hoje|domingo|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|dia)\b/.test(t)) return null;
+  const m = t.match(/^\D*(\d{1,2})\D*$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (Number.isNaN(n) || n <= 0 || n > 30) return null;
+  return n;
+}
+
 function sanitizeWhatsAppText(text: string): string {
   if (!text) return text;
   return text
@@ -1482,6 +1495,11 @@ async function handleDeterministicCommand(
   // Deterministic slot-filling while in active reservation flow
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
     const extracted = parseReservationDetails(text);
+    // If only people is missing, accept "4" style answers.
+    if (!extracted.people && !state.reservation?.people) {
+      const onlyPeople = extractStandalonePeople(text);
+      if (onlyPeople) extracted.people = onlyPeople;
+    }
     if (Object.keys(extracted).length > 0) {
       state.reservation = { ...(state.reservation || {}), ...extracted };
       userStates.set(from, state);
