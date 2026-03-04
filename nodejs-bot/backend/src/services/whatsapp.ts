@@ -52,10 +52,13 @@ const userStates = new Map<string, UserState>();
 const lastOutboundByUser = new Map<string, { hash: string; at: number }>();
 const interactiveDegradedUntil = new Map<string, number>();
 const userProcessingQueue = new Map<string, Promise<void>>();
+const botActiveCache = new Map<string, { value: boolean; at: number }>();
 
 const INTERACTIVE_DEGRADED_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second between messages
 const GRAPH_API_TIMEOUT_MS = 8000;
+const BOT_ACTIVE_CACHE_TTL_MS = 15_000;
+const BOT_ACTIVE_TIMEOUT_MS = 700;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 
 // Command sets
@@ -1587,6 +1590,26 @@ function enqueueUserJob(userId: string, job: () => Promise<void>) {
   }));
 }
 
+async function checkBotActiveFast(phone: string): Promise<boolean> {
+  const now = Date.now();
+  const cached = botActiveCache.get(phone);
+  if (cached && (now - cached.at) <= BOT_ACTIVE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const timeoutGuard = new Promise<boolean>((resolve) => {
+    setTimeout(() => resolve(true), BOT_ACTIVE_TIMEOUT_MS);
+  });
+  const checkPromise = chatwootService.checkBotActive(phone)
+    .then((value) => {
+      botActiveCache.set(phone, { value, at: Date.now() });
+      return value;
+    })
+    .catch(() => true);
+
+  return Promise.race([checkPromise, timeoutGuard]);
+}
+
 async function processMessageInternal(message: any, value: any): Promise<void> {
   try {
     const from = message.from;
@@ -1640,7 +1663,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // Check bot active
     const botActiveStart = Date.now();
-    const botActive = await chatwootService.checkBotActive(from);
+    const botActive = await checkBotActiveFast(from);
     logStep('checkBotActive', botActiveStart);
     if (!botActive) return;
 
