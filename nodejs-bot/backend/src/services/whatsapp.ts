@@ -139,7 +139,7 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     hh = hm[1];
     mm = hm[2];
   } else {
-    const hOnly = t.match(/\b(\d{1,2})\s*h\b/);
+    const hOnly = t.match(/\b(\d{1,2})\s*(h|hora|horas)\b/);
     if (hOnly) hh = hOnly[1];
     else {
       const hWord = t.match(/\b(?:as|às)\s*(\d{1,2})\b/);

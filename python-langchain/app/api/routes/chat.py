@@ -293,7 +293,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         return ChatResponse(
             response=(
                 "Tive uma instabilidade para verificar a disponibilidade agora 😕\n"
-                "Vamos continuar rapidinho: me confirma *quantas pessoas* e eu tento novamente."
+                "Se estiver tudo certo no resumo, toque em *Sim, tudo certo!* novamente que eu tento concluir a reserva."
             ),
             intent="error",
             tool_called=None,
