@@ -1160,16 +1160,15 @@ async function handleDeterministicCommand(
     state.reservation = undefined;
     state.has_interacted = true;
     userStates.set(from, state);
-    await sendMainMenu(from, true);
+    await sendMainMenu(from, false);
     return true;
   }
 
   // Greeting outside active flow -> open main menu immediately
   if (isGreeting && !isInActiveFlow(state)) {
-    const compact = !!state.has_interacted;
     state.has_interacted = true;
     userStates.set(from, state);
-    await sendMainMenu(from, compact);
+    await sendMainMenu(from, false);
     return true;
   }
 
