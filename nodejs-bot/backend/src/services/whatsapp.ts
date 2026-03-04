@@ -1410,11 +1410,7 @@ async function handleDeterministicCommand(
       });
       const code = state.reservation?.pending_cancellation_code || reservationId.substring(0, 8).toUpperCase();
       await sendWhatsAppText(from, `Reserva ${code} cancelada com sucesso. ✅`);
-      if (state.reservation) {
-        state.reservation.awaiting_cancellation = false;
-        state.reservation.pending_cancellation_id = undefined;
-        state.reservation.pending_cancellation_code = undefined;
-      }
+      state.reservation = undefined;
       userStates.set(from, state);
       const remainingActive = await fetchActiveReservationsWithRetry(from);
       if (remainingActive.length > 0) {
@@ -1431,11 +1427,7 @@ async function handleDeterministicCommand(
   }
 
   if (text === 'cancel_no' || text === 'cancel_nao') {
-    if (state.reservation) {
-      state.reservation.awaiting_cancellation = false;
-      state.reservation.pending_cancellation_id = undefined;
-      state.reservation.pending_cancellation_code = undefined;
-    }
+    state.reservation = undefined;
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Perfeito, mantive sua reserva como está. 👍');
     await sendWhatsAppText(from, 'Se quiser, posso te mostrar suas reservas ativas novamente.');
@@ -1463,12 +1455,7 @@ async function handleDeterministicCommand(
           console.error('[ReservasDeterministic] cancel_all item failed:', reservationId, err?.message || err);
         }
       }
-      if (state.reservation) {
-        state.reservation.awaiting_cancellation = false;
-        state.reservation.pending_cancellation_all_ids = undefined;
-        state.reservation.pending_cancellation_id = undefined;
-        state.reservation.pending_cancellation_code = undefined;
-      }
+      state.reservation = undefined;
       userStates.set(from, state);
       await sendWhatsAppText(from, `Concluído ✅ Cancelei ${cancelled} de ${ids.length} reservas ativas.`);
       await sendWhatsAppText(from, 'Se quiser, posso verificar se ainda restou alguma ativa.');
@@ -1481,12 +1468,7 @@ async function handleDeterministicCommand(
   }
 
   if (text === 'cancel_all_no') {
-    if (state.reservation) {
-      state.reservation.awaiting_cancellation = false;
-      state.reservation.pending_cancellation_all_ids = undefined;
-      state.reservation.pending_cancellation_id = undefined;
-      state.reservation.pending_cancellation_code = undefined;
-    }
+    state.reservation = undefined;
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Perfeito, não cancelei as reservas. 👍');
     return true;
