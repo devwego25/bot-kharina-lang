@@ -2,6 +2,13 @@
 
 from functools import lru_cache
 from typing import Optional
+import os
+
+# Normalize socks5h for httpx globally
+for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+    val = os.environ.get(env_var)
+    if val and "socks5h://" in val:
+        os.environ[env_var] = val.replace("socks5h://", "socks5://")
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

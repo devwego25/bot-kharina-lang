@@ -36,7 +36,10 @@ class McpClient:
         self.timeout = timeout
         self.ready = False
         self._session_id: Optional[str] = None
-        self._client = httpx.AsyncClient(timeout=timeout)
+        import os
+        # Normalize socks5h:// to socks5:// for httpx
+        proxies = os.environ.get("HTTP_PROXY", "").replace("socks5h://", "socks5://") or None
+        self._client = httpx.AsyncClient(timeout=timeout, proxy=proxies)
         
         logger.info(f"MCP Client '{name}' initialized with {transport} transport")
     
