@@ -816,10 +816,10 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       return;
     }
 
+
     // Get/create user state
-    let state = userStates.get(from);
-    if (!state) {
-      state = {};
+    let state: UserState = userStates.get(from) ?? {};
+    if (!userStates.has(from)) {
       userStates.set(from, state);
     }
 
@@ -843,6 +843,23 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // Handle UI actions from Python
     if (result.ui_action) {
+      // First, apply any reservation_state updates from Python agent
+      if (result.state_updates?.reservation_state) {
+        const rs = result.state_updates.reservation_state as Record<string, any>;
+        state.reservation = {
+          ...(state.reservation || {}),
+          name: rs.name ?? state.reservation?.name,
+          date_text: rs.date_text ?? state.reservation?.date_text,
+          time_text: rs.time_text ?? state.reservation?.time_text,
+          people: rs.people ?? state.reservation?.people,
+          kids: rs.kids ?? state.reservation?.kids,
+          contact_phone: rs.contact_phone ?? state.reservation?.contact_phone,
+          phone_confirmed: rs.phone_confirmed ?? state.reservation?.phone_confirmed,
+        };
+        userStates.set(from, state);
+        console.log(`[State] Reservation state updated from Python:`, state.reservation);
+      }
+
       switch (result.ui_action.type) {
         case 'show_confirmation_menu':
           await sendConfirmationMenu(from, state);
@@ -893,9 +910,10 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       }
     }
 
-    // Update state
+    // Update state from any remaining state_updates keys
     if (result.state_updates) {
-      state = { ...state, ...result.state_updates };
+      const { reservation_state, ...rest } = result.state_updates as any;
+      state = { ...state, ...rest };
       userStates.set(from, state);
     }
 

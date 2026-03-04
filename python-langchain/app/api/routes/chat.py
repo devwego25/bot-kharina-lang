@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 from langchain_core.messages import HumanMessage, AIMessage
@@ -13,6 +13,71 @@ from app.core.agent import get_agent_executor
 from app.core.memory import get_session_memory, add_message
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_reservation_updates(output: str, request: ChatRequest) -> Dict[str, Any]:
+    """
+    Extract reservation state fields from agent output text and request context.
+    Returns a dict to be merged into state_updates['reservation_state'].
+    """
+    updates: Dict[str, Any] = {}
+
+    # Carry forward all existing context fields
+    if request.context and request.context.reservation_state:
+        rs = request.context.reservation_state
+        if rs.name:          updates["name"] = rs.name
+        if rs.date_text:     updates["date_text"] = rs.date_text
+        if rs.time_text:     updates["time_text"] = rs.time_text
+        if rs.people is not None:  updates["people"] = rs.people
+        if rs.kids is not None:    updates["kids"] = rs.kids
+        if rs.contact_phone: updates["contact_phone"] = rs.contact_phone
+        if rs.phone_confirmed: updates["phone_confirmed"] = rs.phone_confirmed
+
+    # --- Extract date in YYYY-MM-DD format from agent output ---
+    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", output)
+    if not date_match:
+        # Try DD/MM/YYYY format
+        date_match = re.search(r"(\d{2}/\d{2}/\d{4})", output)
+        if date_match:
+            # Convert to YYYY-MM-DD
+            parts = date_match.group(1).split("/")
+            updates["date_text"] = f"{parts[2]}-{parts[1]}-{parts[0]}"
+    else:
+        updates["date_text"] = date_match.group(1)
+
+    # --- Extract time HH:MM ---
+    time_match = re.search(r"\b(\d{1,2})[hH:](\d{0,2})\b", output)
+    if time_match:
+        hh = time_match.group(1).zfill(2)
+        mm = (time_match.group(2) or "00").zfill(2)
+        updates["time_text"] = f"{hh}:{mm}"
+
+    # --- Extract number of people ---
+    people_match = re.search(
+        r"(?:pessoas?|people|pax)[^\d]*(\d+)|" +
+        r"(\d+)\s*(?:pessoa|people|pax)",
+        output, re.IGNORECASE
+    )
+    if people_match:
+        val = people_match.group(1) or people_match.group(2)
+        updates["people"] = int(val)
+
+    # --- Extract number of kids ---
+    kids_match = re.search(
+        r"(?:crian[çc]a|kid|child)[^\d]*(\d+)|(\d+)\s*(?:crian[çc]a|kid|child)",
+        output, re.IGNORECASE
+    )
+    if kids_match:
+        val = kids_match.group(1) or kids_match.group(2)
+        updates["kids"] = int(val)
+    elif re.search(r"sem crian[çc]a|no kids|0 crian[çc]a", output, re.IGNORECASE):
+        updates["kids"] = 0
+
+    # --- Extract client name (from context) ---
+    if request.context and request.context.user_name:
+        updates["name"] = updates.get("name") or request.context.user_name
+
+    return updates
 
 router = APIRouter()
 
@@ -191,6 +256,23 @@ async def chat(request: ChatRequest) -> ChatResponse:
         # Get last tool called
         last_tool = tool_calls[-1]["tool"] if tool_calls else None
         
+        # Build state_updates — always include reservation state when in reservation flow
+        state_updates: Dict[str, Any] = {"last_intent": intent}
+        
+        # Propagate reservation state updates back to Node.js
+        if ui_action and ui_action.type == "show_confirmation_menu":
+            # Extract from agent output + existing context so Node.js can build the
+            # confirmation menu with real data instead of "❓ Pendente"
+            reservation_updates = _extract_reservation_updates(output, request)
+            if reservation_updates:
+                state_updates["reservation_state"] = reservation_updates
+                logger.info(f"Propagating reservation state: {reservation_updates}")
+        elif intent in ("criar_reserva", "interesse_reserva"):
+            # Progressively update reservation state even before confirmation
+            reservation_updates = _extract_reservation_updates(output, request)
+            if reservation_updates:
+                state_updates["reservation_state"] = reservation_updates
+        
         # Save to memory (only if not a pure menu command)
         if not ui_action or ui_action.type != "show_main_menu":
             memory.chat_memory.add_user_message(request.message)
@@ -203,7 +285,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
             intent=intent,
             tool_called=last_tool,
             ui_action=ui_action,
-            state_updates={"last_intent": intent}
+            state_updates=state_updates
         )
         
     except Exception as e:
