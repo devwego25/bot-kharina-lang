@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional, Type
 
 from langchain.tools import BaseTool
@@ -10,6 +11,44 @@ from pydantic import BaseModel, Field
 from app.core.mcp_client import get_mcp_clients
 
 logger = logging.getLogger(__name__)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
+STORE_ALIAS_TO_UUID = {
+    "jardim botanico": "a99c098f-c16b-4168-a5b1-54e76aa1a855",
+    "cabral": "c6919b3c-f5ff-4006-a226-2b493d9d8cf5",
+    "agua verde": "fde9ba37-baff-4958-b6be-5ced7059864c",
+    "batel": "b45c9b5e-4f79-47b1-a442-ea8fb9d6e977",
+    "portao": "f0f6ae17-01d1-4c51-a423-33222f8fcd5c",
+    "londrina": "3e027375-3049-4080-98c3-9f7448b8fd62",
+    "higienopolis": "3e027375-3049-4080-98c3-9f7448b8fd62",
+    "sao paulo": "03dc5466-6c32-4e9e-b92f-c8b02e74bba6",
+    "shopping parque da cidade": "03dc5466-6c32-4e9e-b92f-c8b02e74bba6",
+}
+
+
+def _normalize_store_id(raw: str) -> str:
+    value = (raw or "").strip()
+    if UUID_RE.match(value):
+        return value
+    normalized = (
+        value.lower()
+        .replace("á", "a")
+        .replace("à", "a")
+        .replace("â", "a")
+        .replace("ã", "a")
+        .replace("é", "e")
+        .replace("ê", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ô", "o")
+        .replace("õ", "o")
+        .replace("ú", "u")
+        .replace("ç", "c")
+    )
+    resolved = STORE_ALIAS_TO_UUID.get(normalized)
+    if resolved:
+        logger.warning("Resolved non-UUID store_id '%s' -> '%s'", raw, resolved)
+        return resolved
+    return value
 
 
 # --- Schemas ---
@@ -67,9 +106,10 @@ class CheckAvailabilityTool(BaseTool):
     async def _arun(self, store_id: str, date: str, time: str, number_of_people: int) -> str:
         clients = await get_mcp_clients()
         reservas = clients["reservas"]
+        resolved_store_id = _normalize_store_id(store_id)
         
         result = await reservas.call_tool("check_availability", {
-            "storeId": store_id,
+            "storeId": resolved_store_id,
             "date": date,
             "time": time,
             "numberOfPeople": number_of_people
@@ -98,9 +138,10 @@ class CreateReservationTool(BaseTool):
     ) -> str:
         clients = await get_mcp_clients()
         reservas = clients["reservas"]
+        resolved_store_id = _normalize_store_id(store_id)
         
         args = {
-            "storeId": store_id,
+            "storeId": resolved_store_id,
             "clientPhone": client_phone,
             "date": date,
             "time": time,

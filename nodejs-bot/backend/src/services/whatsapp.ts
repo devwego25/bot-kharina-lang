@@ -1012,6 +1012,12 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       userStates.set(from, state);
     }
 
+    // If confirmation is pending, accept plain-text confirmations as button equivalent.
+    const textLower = text.toLowerCase().trim();
+    if (state.reservation?.awaiting_confirmation && /^(sim|ok|confirmo|pode confirmar|tudo certo|esta tudo certo|está tudo certo)$/.test(textLower)) {
+      text = 'confirm_reserva_sim';
+    }
+
     // Try deterministic commands first
     const deterministicStart = Date.now();
     const handled = await handleDeterministicCommand(text, from, state, rawPushName);
