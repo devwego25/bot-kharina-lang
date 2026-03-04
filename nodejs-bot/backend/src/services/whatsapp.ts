@@ -76,6 +76,16 @@ const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
   unidade_saopaulo: { name: 'São Paulo', storeId: '03dc5466-6c32-4e9e-b92f-c8b02e74bba6' }
 };
 
+const UNIT_TEXT_MATCHERS: Array<{ rx: RegExp; id: keyof typeof UNIT_CONFIG }> = [
+  { rx: /\bjardim\s*botanico\b|\bbotanico\b/, id: 'unidade_botanico' },
+  { rx: /\bcabral\b/, id: 'unidade_cabral' },
+  { rx: /\bagua\s*verde\b/, id: 'unidade_agua_verde' },
+  { rx: /\bbatel\b/, id: 'unidade_batel' },
+  { rx: /\bportao\b/, id: 'unidade_portao' },
+  { rx: /\blondrina\b/, id: 'unidade_londrina' },
+  { rx: /\bsao\s*paulo\b/, id: 'unidade_saopaulo' }
+];
+
 // Bot message patterns to ignore (echo detection)
 const BOT_MESSAGE_PATTERNS = [
   /^(opa!? ?👋? ?eu sou a kha|beleza!? ?👌|escolha uma opção|escolhe a cidade|qual unidade)/i,
@@ -1309,6 +1319,9 @@ async function handleDeterministicCommand(
   profileName?: string
 ): Promise<boolean> {
   const normalized = text.trim().toLowerCase();
+  const normalizedNoAccent = normalized
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
   const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
   const isReservationIntent =
@@ -1754,6 +1767,19 @@ async function handleDeterministicCommand(
   }
 
   // Deterministic slot-filling while in active reservation flow
+  if (isInActiveFlow(state) && state.reservation?.phone_confirmed) {
+    const unitByText = UNIT_TEXT_MATCHERS.find((u) => u.rx.test(normalizedNoAccent));
+    if (unitByText) {
+      const unit = UNIT_CONFIG[unitByText.id];
+      state.preferred_unit_name = unit.name;
+      state.preferred_store_id = unit.storeId;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, `Perfeito! ✅ Atualizei para a unidade ${unit.name}.`);
+      await sendWhatsAppText(from, 'Agora me confirma os outros dados da reserva (adultos, data/horário e crianças, se houver).');
+      return true;
+    }
+  }
+
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
     const extracted = parseReservationDetails(text);
     let deltaAppliedMessage: string | null = null;
@@ -1810,6 +1836,9 @@ async function handleDeterministicCommand(
       userStates.set(from, state);
       return true;
     }
+    // Stay deterministic while in active flow; avoid falling back to LLM on ambiguous turns.
+    await sendWhatsAppText(from, 'Vamos seguir com a reserva 😊 Me manda adultos, data/horário e crianças (se houver), ou diga exatamente o que quer mudar.');
+    return true;
   }
 
   return false;
