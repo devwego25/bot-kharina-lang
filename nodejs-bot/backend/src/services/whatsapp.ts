@@ -93,6 +93,29 @@ function sanitizeWhatsAppText(text: string): string {
     .trim();
 }
 
+function shouldOfferMainMenu(result: any): boolean {
+  const intent = String(result?.intent || '').toLowerCase();
+  const response = String(result?.response || '').toLowerCase();
+
+  if (intent === 'error') return true;
+
+  const noReservationHints = [
+    'não possui reservas ativas',
+    'nao possui reservas ativas',
+    'não encontrei nenhuma reserva',
+    'nao encontrei nenhuma reserva',
+    'nenhuma reserva encontrada',
+    'não há reservas',
+    'nao ha reservas'
+  ];
+
+  if (['interesse_reserva', 'consultar_reserva', 'cancelar_reserva'].includes(intent)) {
+    if (noReservationHints.some((hint) => response.includes(hint))) return true;
+  }
+
+  return false;
+}
+
 function isPromptInjection(text: string): boolean {
   const t = text.toLowerCase();
   const markers = [
@@ -935,6 +958,13 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
         chatwootService.syncMessage(from, userName, safeResponse, 'outgoing', { source: 'bot' }).catch((err) => {
           console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
         });
+
+        if (shouldOfferMainMenu(result)) {
+          await sendMainMenu(from, true);
+          chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' }).catch((err) => {
+            console.error(`[Chatwoot] async outgoing menu sync failed for ${from}:`, err?.message || err);
+          });
+        }
       }
     }
 
