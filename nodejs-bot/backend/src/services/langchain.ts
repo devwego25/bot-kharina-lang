@@ -49,7 +49,7 @@ interface ChatResponse {
 export class LangChainService {
   private client = axios.create({
     baseURL: LANGCHAIN_URL,
-    timeout: 30000, // 30 seconds
+    timeout: 12000, // 12 seconds (faster failover for WhatsApp UX)
     headers: {
       'Content-Type': 'application/json'
     }
