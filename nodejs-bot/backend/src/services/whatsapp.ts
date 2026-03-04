@@ -63,7 +63,7 @@ const BOT_ACTIVE_TIMEOUT_MS = 700;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 
 // Command sets
-const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery']);
+const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
 const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite']);
 const GREETING_REGEX = /\b(oi|ol[áa]|bom dia|boa tarde|boa noite|e ai|e aí|opa|tudo bem|tudo bom)\b/i;
 const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
@@ -467,6 +467,26 @@ async function buildCardapioMessage(cardapioCommand: string): Promise<string> {
   const legacySp = city === 'saopaulo' ? await db.getConfig('link_cardapio_sp') : null;
   const url = dynamic || legacySp || baseMap[city] || 'https://cardapio.kharina.com.br/';
   return `Perfeito! Aqui está o cardápio de ${cityLabelMap[city] || city} 🍽️\n👉 ${url}`;
+}
+
+async function buildKidsInfoMessage(): Promise<string> {
+  const base = await db.getConfig('kids_info_content');
+  const configs = await db.listConfigs();
+  const kidsInstagram = configs.filter((c) => String(c.key || '').startsWith('kids_instagram_'));
+
+  const links = kidsInstagram
+    .map((c) => {
+      const unitRaw = String(c.key).replace('kids_instagram_', '');
+      const unit = unitRaw
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (ch) => ch.toUpperCase());
+      return `- ${unit}: ${c.value}`;
+    })
+    .join('\n');
+
+  const content = base || 'Hoje não consegui carregar as informações do Espaço Kids. Pode me chamar novamente em instantes?';
+  if (!links) return content;
+  return `${content}\n\n📸 Instagram do Espaço Kids por unidade:\n${links}`;
 }
 
 type ActiveReservation = {
@@ -948,14 +968,15 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
           rows: [
             { id: "menu_cardapio", title: "1️⃣ Ver Cardápio" },
             { id: "menu_reserva", title: "2️⃣ Reservar Mesa" },
-            { id: "menu_delivery", title: "3️⃣ Delivery 🍟🚀" }
+            { id: "menu_delivery", title: "3️⃣ Delivery 🍟🚀" },
+            { id: "menu_kids", title: "4️⃣ Espaço Kids 🧸" }
           ]
         }]
       }
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_main_menu',
-    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery');
+    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids');
 }
 
 async function sendCitiesMenu(to: string): Promise<void> {
@@ -1456,6 +1477,16 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendDeliveryCitiesMenu(from);
+    return true;
+  }
+
+  // Espaço Kids menu
+  if (text === 'menu_kids') {
+    state.has_interacted = true;
+    userStates.set(from, state);
+    const kidsMsg = await buildKidsInfoMessage();
+    await sendWhatsAppText(from, kidsMsg);
+    await sendMainMenu(from, true);
     return true;
   }
 
