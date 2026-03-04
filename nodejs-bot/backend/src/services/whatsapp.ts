@@ -247,8 +247,10 @@ async function sendInteractiveWithFallback(
 
   try {
     await postGraphMessage(menuPayload, label, 2);
+    console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
     return true;
-  } catch {
+  } catch (err: any) {
+    console.error(`[WhatsApp] ${label} failed:`, err.message);
     interactiveDegradedUntil.set(to, now + INTERACTIVE_DEGRADED_WINDOW_MS);
     if (fallbackText) await sendWhatsAppText(to, fallbackText);
     return false;
