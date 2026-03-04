@@ -1528,6 +1528,8 @@ async function handleDeterministicCommand(
   if (text === 'menu_kids') {
     state.has_interacted = true;
     userStates.set(from, state);
+    const kidsSticker = await db.getConfig('kids_sticker_media');
+    if (kidsSticker) await sendWhatsAppSticker(from, kidsSticker);
     const kidsMsg = await buildKidsInfoMessage();
     await sendWhatsAppText(from, kidsMsg);
     await sendMainMenu(from, true);
