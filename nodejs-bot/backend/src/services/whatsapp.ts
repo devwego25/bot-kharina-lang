@@ -1723,6 +1723,7 @@ async function handleDeterministicCommand(
   // Deterministic slot-filling while in active reservation flow
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
     const extracted = parseReservationDetails(text);
+    let deltaAppliedMessage: string | null = null;
     if (state.reservation) {
       const deltas = extractPartyDeltas(text);
       if (deltas) {
@@ -1731,6 +1732,12 @@ async function handleDeterministicCommand(
         }
         if (deltas.kidsDelta !== 0 && state.reservation.kids !== undefined && extracted.kids === undefined) {
           extracted.kids = Math.max(0, Number(state.reservation.kids) + deltas.kidsDelta);
+        }
+        const parts: string[] = [];
+        if (deltas.adultsDelta) parts.push(`${deltas.adultsDelta > 0 ? '+' : ''}${deltas.adultsDelta} adultos`);
+        if (deltas.kidsDelta) parts.push(`${deltas.kidsDelta > 0 ? '+' : ''}${deltas.kidsDelta} crianças`);
+        if (parts.length > 0) {
+          deltaAppliedMessage = `Perfeito, atualizei: ${parts.join(' e ')}. Quer manter data e horário?`;
         }
       }
     }
@@ -1750,6 +1757,16 @@ async function handleDeterministicCommand(
       if (state.reservation.kids === undefined) missing.push('se terá crianças (e quantas)');
 
       if (missing.length > 0) {
+        if (
+          deltaAppliedMessage &&
+          !extracted.date_text &&
+          !extracted.time_text &&
+          state.reservation.date_text &&
+          state.reservation.time_text
+        ) {
+          await sendWhatsAppText(from, deltaAppliedMessage);
+          return true;
+        }
         await sendWhatsAppText(from, `Perfeito! ✅ Agora me confirma ${missing.join(' e ')}.`);
         return true;
       }
