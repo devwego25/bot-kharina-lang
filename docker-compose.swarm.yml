@@ -1,5 +1,5 @@
 # Docker Swarm Stack for Kharina Bot
-# Deploy: docker stack deploy -c docker-compose.swarm.yml kharina-bot
+# Deploy: docker stack deploy -c docker-compose.swarm.yml kharina-bot-v2
 
 version: '3.8'
 
@@ -20,6 +20,9 @@ services:
       - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
       - DEBUG=false
       - LOG_LEVEL=INFO
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - NO_PROXY=${NO_PROXY}
     networks:
       - kharina-network
       - KharinaNet  # To reach cardapio_app
@@ -67,6 +70,9 @@ services:
       - MCP_CARDAPIO_TOKEN=${MCP_CARDAPIO_TOKEN}
       - MCP_RESERVAS_URL=${MCP_RESERVAS_URL}
       - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+      - NO_PROXY=${NO_PROXY}
     networks:
       - kharina-network
       - KharinaNet
