@@ -290,6 +290,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
         
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}", exc_info=True)
+        waiting_confirmation = bool(
+            request.context
+            and request.context.reservation_state
+            and request.context.reservation_state.awaiting_confirmation
+        )
         return ChatResponse(
             response=(
                 "Tive uma instabilidade para verificar a disponibilidade agora 😕\n"
@@ -297,6 +302,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
             ),
             intent="error",
             tool_called=None,
-            ui_action=None,
+            ui_action=UIAction(type="show_confirmation_menu", data={}) if waiting_confirmation else None,
             state_updates={"last_intent": "error"},
         )
