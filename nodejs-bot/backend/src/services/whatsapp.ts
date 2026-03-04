@@ -260,10 +260,11 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
 function extractStandalonePeople(text: string): number | null {
   const t = String(text || '').toLowerCase().trim();
   if (!t) return null;
-  // Ignore obvious date/time-only messages
-  if (/\b(\d{1,2})[:h](\d{2})\b/.test(t) || /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(t)) return null;
-  if (/\b(crian|hora|horas|h|amanh|hoje|domingo|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|dia)\b/.test(t)) return null;
-  const m = t.match(/^\D*(\d{1,2})\D*$/);
+  // Never infer adults from kids-only messages.
+  if (/\bcrian/.test(t) && !/\b(adulto|adultos|pessoa|pessoas)\b/.test(t)) return null;
+
+  // Accept first number when it starts the sentence, e.g. "4 para amanhã às 11".
+  const m = t.match(/^(?:sao|são)?\s*(\d{1,2})\b/);
   if (!m) return null;
   const n = parseInt(m[1], 10);
   if (Number.isNaN(n) || n <= 0 || n > 30) return null;
