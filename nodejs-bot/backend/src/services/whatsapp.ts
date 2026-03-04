@@ -1053,7 +1053,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       reservation_state: state.reservation
     }, {
       // Confirmation can involve slower MCP operations (availability/create).
-      timeoutMs: text === 'confirm_reserva_sim' ? 40000 : undefined
+      timeoutMs: text === 'confirm_reserva_sim' ? 70000 : undefined
     });
     logStep('langchain.processMessage', langchainStart);
 
