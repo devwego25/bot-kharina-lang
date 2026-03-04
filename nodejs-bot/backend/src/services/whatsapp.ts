@@ -410,7 +410,7 @@ function normalizeIsoDate(value: string): string {
 
 function normalizeTime(value: string): string {
   const v = String(value || '').trim();
-  const m = v.match(/^(\d{1,2})(?::(\d{2}))?$/);
+  const m = v.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?$/);
   if (!m) return v;
   return `${m[1].padStart(2, '0')}:${(m[2] || '00').padStart(2, '0')}`;
 }
@@ -1040,8 +1040,8 @@ async function sendConfirmationMenu(to: string, state: UserState): Promise<void>
     `Dá uma olhada no resumo da sua reserva:`,
     `- 👤 Nome: ${resv.name || '❓ Pendente'}`,
     `- 📱 Celular: ${formatBrazilPhone(resv.contact_phone || '')}`,
-    `- 📅 Data: ${resv.date_text || '❓ Pendente'}`,
-    `- ⏰ Horário: ${resv.time_text || '❓ Pendente'}`,
+    `- 📅 Data: ${resv.date_text ? toBrDate(normalizeIsoDate(resv.date_text)) : '❓ Pendente'}`,
+    `- ⏰ Horário: ${resv.time_text ? normalizeTime(resv.time_text) : '❓ Pendente'}`,
     `- 👨 Adultos: ${resv.people !== undefined ? resv.people : '❓ Pendente'}`,
     `- 👶 Crianças: ${resv.kids !== undefined ? resv.kids : '❓ Pendente'}`,
     `- 👥 Total: ${(resv.people !== undefined && resv.kids !== undefined) ? (Number(resv.people) + Number(resv.kids)) : '❓ Pendente'}`,
