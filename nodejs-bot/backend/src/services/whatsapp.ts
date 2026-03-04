@@ -614,7 +614,7 @@ async function queryReservationsDeterministic(from: string): Promise<{ ok: boole
         `📍 Unidade: ${r?.storeName || r?.store || 'N/A'}\n` +
         `📅 Data: ${toBrDate(r?.date || '')}\n` +
         `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
-        `👥 Pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
+        `👥 Total de pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
         `✅ Status: ${statusLabel(r?.status)}`
       );
     });
@@ -636,12 +636,13 @@ async function createReservationDeterministic(from: string, state: UserState): P
   const phone = toDigitsPhone(r.contact_phone || from);
   const date = normalizeIsoDate(r.date_text || '');
   const time = normalizeTime(r.time_text || '');
-  const people = Number(r.people || 0);
+  const adults = Number(r.people || 0);
   const kids = Number(r.kids ?? 0);
+  const totalPeople = adults + kids;
   const name = String(r.name || '').trim();
   const notes = String(r.notes || r.occasion || '').trim();
 
-  if (!storeId || !phone || !date || !time || !people) {
+  if (!storeId || !phone || !date || !time || !adults) {
     return {
       ok: false,
       message: 'Faltaram alguns dados obrigatórios para concluir a reserva. Vamos revisar rapidinho pelo resumo. 🙏'
@@ -658,14 +659,14 @@ async function createReservationDeterministic(from: string, state: UserState): P
     storeId,
     date,
     time,
-    numberOfPeople: people,
+    numberOfPeople: totalPeople,
     kids,
     ...(notes ? { notes } : {})
   };
 
   try {
     // If client pressed confirm again, avoid duplicate creates and try to recover existing reservation first.
-    const preExisting = await waitForReservationMatchWithId({ phone, storeId, date, time, people }, 2, 600);
+    const preExisting = await waitForReservationMatchWithId({ phone, storeId, date, time, people: totalPeople }, 2, 600);
     if (preExisting?.id) {
       const recoveredCode = displayReservationCode(preExisting);
       const recoveredStatus = preExisting.status ? statusLabel(preExisting.status) : undefined;
@@ -673,8 +674,9 @@ async function createReservationDeterministic(from: string, state: UserState): P
         `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
         `📅 Data: ${toBrDate(date)}`,
         `⏰ Horário: ${time}`,
-        `👥 Pessoas: ${people}`,
+        `👨 Adultos: ${adults}`,
         `👶 Crianças: ${kids}`,
+        `👥 Total: ${totalPeople}`,
         recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : `🆔 ID da reserva: ${preExisting.id}`,
         recoveredStatus ? `✅ Status: ${recoveredStatus}` : ''
       ].filter(Boolean);
@@ -703,7 +705,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     let picked = pickReservationCode(createResult);
 
     // Poll verification for eventual consistency in Reservas API.
-    const matched = await waitForReservationMatchWithId({ phone, storeId, date, time, people }, 8, 1500);
+    const matched = await waitForReservationMatchWithId({ phone, storeId, date, time, people: totalPeople }, 8, 1500);
 
     if (matched) {
       picked = {
@@ -720,8 +722,9 @@ async function createReservationDeterministic(from: string, state: UserState): P
         `Telefone: +${phone}`,
         `Unidade: ${unitName} (${storeId})`,
         `Data/Hora: ${date} ${time}`,
-        `Pessoas: ${people}`,
+        `Adultos: ${adults}`,
         `Crianças: ${kids}`,
+        `Total: ${totalPeople}`,
         `Nome: ${name || 'N/A'}`,
         notes ? `Obs: ${notes}` : '',
         'Ação: validar no MCP/Reservas e retornar ao cliente.'
@@ -761,8 +764,9 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
       `📅 Data: ${toBrDate(date)}`,
       `⏰ Horário: ${time}`,
-      `👥 Pessoas: ${people}`,
+      `👨 Adultos: ${adults}`,
       `👶 Crianças: ${kids}`,
+      `👥 Total: ${totalPeople}`,
       displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
       previousReservationCode ? `🔁 Alteração concluída (reserva anterior: ${previousReservationCode}).` : '',
       status ? `✅ Status: ${status}` : ''
@@ -779,8 +783,9 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `Telefone: +${toDigitsPhone(rr.contact_phone || from)}`,
       `Unidade: ${state.preferred_unit_name || 'N/A'} (${state.preferred_store_id || 'N/A'})`,
       `Data/Hora: ${normalizeIsoDate(rr.date_text || '') || 'N/A'} ${normalizeTime(rr.time_text || '') || ''}`.trim(),
-      `Pessoas: ${rr.people ?? 'N/A'}`,
+      `Adultos: ${rr.people ?? 'N/A'}`,
       `Crianças: ${rr.kids ?? 'N/A'}`,
+      `Total: ${(Number(rr.people || 0) + Number(rr.kids ?? 0))}`,
       `Nome: ${rr.name || from}`,
       `Erro: ${String(err?.message || err || 'unknown')}`,
       'Ação: verificar no MCP/Reservas e acompanhar cliente.'
@@ -1028,8 +1033,9 @@ async function sendConfirmationMenu(to: string, state: UserState): Promise<void>
     `- 📱 Celular: ${formatBrazilPhone(resv.contact_phone || '')}`,
     `- 📅 Data: ${resv.date_text || '❓ Pendente'}`,
     `- ⏰ Horário: ${resv.time_text || '❓ Pendente'}`,
-    `- 👥 Pessoas: ${resv.people !== undefined ? resv.people : '❓ Pendente'}`,
+    `- 👨 Adultos: ${resv.people !== undefined ? resv.people : '❓ Pendente'}`,
     `- 👶 Crianças: ${resv.kids !== undefined ? resv.kids : '❓ Pendente'}`,
+    `- 👥 Total: ${(resv.people !== undefined && resv.kids !== undefined) ? (Number(resv.people) + Number(resv.kids)) : '❓ Pendente'}`,
     resv.notes ? `- 📝 Observações: ${resv.notes}` : '',
     `- 📍 Unidade: ${unit}`
   ].filter(Boolean).join('\n');
@@ -1304,7 +1310,7 @@ async function handleDeterministicCommand(
     userStates.set(from, state);
     await sendWhatsAppText(
       from,
-      `Perfeito! Vamos alterar a reserva ${selected.code}. Me envie em uma mensagem: data, horário, número de pessoas, crianças (se houver) e observações (opcional).`
+      `Perfeito! Vamos alterar a reserva ${selected.code}. Me envie em uma mensagem: data, horário, número de adultos, crianças (se houver) e observações (opcional).`
     );
     return true;
   }
@@ -1449,7 +1455,7 @@ async function handleDeterministicCommand(
     }
     userStates.set(from, state);
 
-    const msg = `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nMe conta: quantas pessoas e para quando?`;
+    const msg = `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nMe conta: quantos adultos e para quando?`;
     await sendWhatsAppText(from, msg);
     return true;
   }
@@ -1467,7 +1473,7 @@ async function handleDeterministicCommand(
     const extracted = parseReservationDetails(text);
     state.reservation = { ...(state.reservation || {}), ...extracted };
     userStates.set(from, state);
-    await sendWhatsAppText(from, 'Perfeito! ✅ Agora me diz *quantas pessoas* serão na reserva.');
+    await sendWhatsAppText(from, 'Perfeito! ✅ Agora me diz *quantos adultos* serão na reserva.');
     return true;
   }
 
@@ -1488,7 +1494,7 @@ async function handleDeterministicCommand(
   if (text === 'confirm_reserva_nao') {
     if (state.reservation) state.reservation.awaiting_confirmation = false;
     userStates.set(from, state);
-    await sendWhatsAppText(from, 'Sem problemas! 😊 Me diz o que você quer alterar (nome, data, horário, pessoas ou crianças).');
+    await sendWhatsAppText(from, 'Sem problemas! 😊 Me diz o que você quer alterar (nome, data, horário, adultos ou crianças).');
     return true;
   }
 
@@ -1505,7 +1511,7 @@ async function handleDeterministicCommand(
       userStates.set(from, state);
 
       const missing: string[] = [];
-      if (!state.reservation.people) missing.push('quantas pessoas');
+      if (!state.reservation.people) missing.push('quantos adultos');
       if (!state.reservation.date_text) missing.push('a data');
       if (!state.reservation.time_text) missing.push('o horário');
       if (state.reservation.kids === undefined) missing.push('se terá crianças (e quantas)');
