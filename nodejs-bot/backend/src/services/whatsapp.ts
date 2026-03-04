@@ -514,6 +514,11 @@ async function handleDeterministicCommand(
   state: UserState
 ): Promise<boolean> {
   const normalized = text.trim().toLowerCase();
+  const isReservationIntent =
+    /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
+    normalized.includes('quero reservar') ||
+    normalized.includes('fazer reserva') ||
+    normalized.includes('reservar mesa');
 
   // Main menu
   if (text === 'MENU_PRINCIPAL' || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
@@ -521,6 +526,15 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, true);
+    return true;
+  }
+
+  // Natural language reservation intent -> traditional interactive flow
+  if (isReservationIntent && !isInActiveFlow(state)) {
+    state.reservation = state.reservation ? { contact_phone: state.reservation.contact_phone } : undefined;
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await sendUnidadesMenu(from);
     return true;
   }
 
