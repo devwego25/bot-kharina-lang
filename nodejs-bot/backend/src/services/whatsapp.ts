@@ -370,6 +370,51 @@ function statusLabel(raw: any): string {
   return map[v] || String(raw || '');
 }
 
+async function buildCardapioMessage(cardapioCommand: string): Promise<string> {
+  const city = cardapioCommand.replace('cardapio_', '');
+  const baseMap: Record<string, string> = {
+    curitiba: 'https://cardapio.kharina.com.br/curitiba',
+    londrina: 'https://cardapio.kharina.com.br/londrina',
+    saopaulo: 'https://cardapio.kharina.com.br/saopaulo'
+  };
+
+  if (city === 'curitiba') {
+    const unitConfigs = [
+      { label: 'Água Verde', key: 'link_cardapio_curitiba_agua_verde' },
+      { label: 'Batel', key: 'link_cardapio_curitiba_batel' },
+      { label: 'Portão', key: 'link_cardapio_curitiba_portao' },
+      { label: 'Cabral', key: 'link_cardapio_curitiba_cabral' },
+      { label: 'Jardim Botânico', key: 'link_cardapio_curitiba_botanico' }
+    ];
+
+    const resolved: Array<{ label: string; url: string }> = [];
+    for (const unit of unitConfigs) {
+      const link = await db.getConfig(unit.key);
+      resolved.push({ label: unit.label, url: link || baseMap.curitiba });
+    }
+
+    const uniqueUrls = new Set(resolved.map((x) => x.url));
+    if (uniqueUrls.size === 1) {
+      return `Perfeito! Aqui está o cardápio de Curitiba 🍽️\n👉 ${resolved[0].url}`;
+    }
+
+    const lines = [
+      'Perfeito! Aqui estão os cardápios de Curitiba 🍽️',
+      '',
+      ...resolved.map((x) => `• ${x.label}: ${x.url}`)
+    ];
+    return lines.join('\n');
+  }
+
+  const cityLabelMap: Record<string, string> = {
+    londrina: 'Londrina',
+    saopaulo: 'São Paulo'
+  };
+  const dynamic = await db.getConfig(`link_cardapio_${city}`);
+  const url = dynamic || baseMap[city] || 'https://cardapio.kharina.com.br/';
+  return `Perfeito! Aqui está o cardápio de ${cityLabelMap[city] || city} 🍽️\n👉 ${url}`;
+}
+
 type ActiveReservation = {
   reservationId: string;
   code: string;
@@ -1105,8 +1150,7 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
 
-    const link = await db.getConfig(`link_cardapio_${text.replace('cardapio_', '')}`);
-    const msg = `Perfeito! Aqui está o cardápio de ${city} 🍽️\n👉 ${link || 'https://kharina.com.br/cardapio-digital/'}`;
+    const msg = await buildCardapioMessage(text);
     await sendWhatsAppText(from, msg);
     await sendMainMenu(from, true);
     return true;
