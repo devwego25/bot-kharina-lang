@@ -110,7 +110,8 @@ function toIsoDate(d: Date): string {
 }
 
 function parseReservationDetails(text: string): Partial<ReservationState> {
-  const t = (text || '').toLowerCase().trim();
+  const raw = String(text || '').trim();
+  const t = raw.toLowerCase();
   const updates: Partial<ReservationState> = {};
 
   const peopleMatch =
@@ -169,6 +170,17 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     let h = parseInt(hh, 10);
     if (/noite|tarde/.test(t) && h >= 1 && h <= 11) h += 12;
     if (h >= 0 && h <= 23) updates.time_text = `${String(h).padStart(2, '0')}:${mm}`;
+  }
+
+  const noteMarkers = [
+    'obs', 'observa', 'anivers', 'janela', 'parquinho', 'perto do parquinho',
+    'cadeira de bebe', 'cadeirinha', 'cadeirante', 'acessivel', 'acessível',
+    'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar'
+  ];
+  const hasNoteMarker = noteMarkers.some((m) => t.includes(m));
+  const onlyKidsAnswer = /^(\s*(sem crian|não|nao|nenhuma|0)\s*)+$/.test(t);
+  if (hasNoteMarker && !onlyKidsAnswer) {
+    updates.notes = raw.replace(/\s+/g, ' ').trim();
   }
 
   return updates;
@@ -661,8 +673,9 @@ async function sendConfirmationMenu(to: string, state: UserState): Promise<void>
     `- ⏰ Horário: ${resv.time_text || '❓ Pendente'}`,
     `- 👥 Pessoas: ${resv.people !== undefined ? resv.people : '❓ Pendente'}`,
     `- 👶 Crianças: ${resv.kids !== undefined ? resv.kids : '❓ Pendente'}`,
+    resv.notes ? `- 📝 Observações: ${resv.notes}` : '',
     `- 📍 Unidade: ${unit}`
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   const payload = {
     messaging_product: "whatsapp",
