@@ -1650,6 +1650,10 @@ async function handleDeterministicCommand(
   if (text === 'confirm_reserva_sim') {
     await sendWhatsAppText(from, 'Perfeito! ✅ Estou verificando sua reserva agora, só um instante...');
     const done = await createReservationDeterministic(from, state);
+    if (done.ok) {
+      const confirmedSticker = await db.getConfig('reservation_confirmed_sticker_media');
+      if (confirmedSticker) await sendWhatsAppSticker(from, confirmedSticker);
+    }
     await sendWhatsAppText(from, done.message);
     if (!done.ok) {
       const suggestWait = done.message.toLowerCase().includes('alguns minutos');
