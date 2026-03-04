@@ -448,6 +448,21 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
     .filter((x: ActiveReservation) => x.reservationId);
 }
 
+async function fetchActiveReservationsWithRetry(phoneRaw: string): Promise<ActiveReservation[]> {
+  try {
+    return await fetchActiveReservations(phoneRaw);
+  } catch (err1: any) {
+    console.error('[ReservasDeterministic] fetch active reservations failed (attempt 1):', err1?.message || err1);
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      return await fetchActiveReservations(phoneRaw);
+    } catch (err2: any) {
+      console.error('[ReservasDeterministic] fetch active reservations failed (attempt 2):', err2?.message || err2);
+      return [];
+    }
+  }
+}
+
 async function sendManageReservationMenu(to: string, action: 'cancel' | 'alter', reservations: ActiveReservation[]): Promise<void> {
   const title = action === 'cancel' ? 'Qual reserva você quer cancelar?' : 'Qual reserva você quer alterar?';
   const rows = reservations.slice(0, 10).map((r, i) => ({
@@ -1023,7 +1038,7 @@ async function handleDeterministicCommand(
   const isReservationManageIntent =
     /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
   const isCancelIntent =
-    /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva)\b/.test(normalized);
+    /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva|nao vou poder ir|não vou poder ir)\b/.test(normalized);
   const isAlterIntent =
     /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva)\b/.test(normalized);
   const isReservationQueryIntent =
@@ -1070,16 +1085,16 @@ async function handleDeterministicCommand(
   // Natural language reservation intent -> traditional interactive flow
   if (isReservationManageIntent && !isInActiveFlow(state)) {
     if (isCancelIntent) {
-      const active = await fetchActiveReservations(from);
+      const active = await fetchActiveReservationsWithRetry(from);
       if (active.length === 0) {
-        await sendWhatsAppText(from, 'Não encontrei reservas ativas para cancelar no seu número.');
+        await sendWhatsAppText(from, 'Não consegui localizar uma reserva ativa para cancelar agora. Se você acabou de confirmar, aguarde 1 minuto e me peça novamente para cancelar.');
         return true;
       }
       await sendManageReservationMenu(from, 'cancel', active);
       return true;
     }
     if (isAlterIntent) {
-      const active = await fetchActiveReservations(from);
+      const active = await fetchActiveReservationsWithRetry(from);
       if (active.length === 0) {
         await sendWhatsAppText(from, 'Não encontrei reservas ativas para alterar no seu número.');
         return true;
@@ -1092,7 +1107,7 @@ async function handleDeterministicCommand(
 
   if (text.startsWith('cancel_pick_')) {
     const reservationId = text.replace('cancel_pick_', '').trim();
-    const active = await fetchActiveReservations(from);
+    const active = await fetchActiveReservationsWithRetry(from);
     const selected = active.find((r) => r.reservationId === reservationId);
     if (!selected) {
       await sendWhatsAppText(from, 'Não encontrei essa reserva para cancelar. Vou te mostrar as reservas ativas novamente.');
@@ -1154,7 +1169,7 @@ async function handleDeterministicCommand(
 
   if (text.startsWith('alter_pick_')) {
     const reservationId = text.replace('alter_pick_', '').trim();
-    const active = await fetchActiveReservations(from);
+    const active = await fetchActiveReservationsWithRetry(from);
     const selected = active.find((r) => r.reservationId === reservationId);
     if (!selected) {
       await sendWhatsAppText(from, 'Não encontrei essa reserva para alterar. Vou te mostrar as reservas ativas novamente.');
