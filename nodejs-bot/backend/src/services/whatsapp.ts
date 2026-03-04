@@ -31,6 +31,10 @@ interface ReservationState {
   time_text?: string;
   occasion?: string;
   notes?: string;
+  pending_change_source_id?: string;
+  pending_change_source_code?: string;
+  pending_cancellation_id?: string;
+  pending_cancellation_code?: string;
 }
 
 interface UserState {
@@ -366,36 +370,80 @@ function statusLabel(raw: any): string {
   return map[v] || String(raw || '');
 }
 
-async function queryReservationsDeterministic(from: string): Promise<{ ok: boolean; message: string }> {
-  const phone = toDigitsPhone(from);
+type ActiveReservation = {
+  reservationId: string;
+  code: string;
+  storeId: string;
+  storeName: string;
+  date: string;
+  time: string;
+  people: number;
+  status: string;
+};
+
+async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservation[]> {
+  const phone = toDigitsPhone(phoneRaw);
   const mcpReady = await ensureReservasMcpReady();
-  if (!mcpReady) {
-    return { ok: false, message: 'Tive uma instabilidade para consultar suas reservas agora 😕' };
-  }
+  if (!mcpReady) return [];
+  const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
+  const payload = parseMcpToolText(result);
+  const all = Array.isArray(payload?.reservations) ? payload.reservations : [];
+  return all
+    .filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'))
+    .map((x: any) => ({
+      reservationId: String(x?.reservationId || x?.id || ''),
+      code: displayReservationCode({ id: x?.reservationId || x?.id, code: x?.code || x?.reservationCode }) || 'N/A',
+      storeId: String(x?.storeId || ''),
+      storeName: String(x?.storeName || x?.store || 'N/A'),
+      date: String(x?.date || ''),
+      time: normalizeTime(String(x?.time || '')),
+      people: Number(x?.numberOfPeople ?? x?.people ?? 0),
+      status: statusLabel(x?.status)
+    }))
+    .filter((x: ActiveReservation) => x.reservationId);
+}
 
+async function sendManageReservationMenu(to: string, action: 'cancel' | 'alter', reservations: ActiveReservation[]): Promise<void> {
+  const title = action === 'cancel' ? 'Qual reserva você quer cancelar?' : 'Qual reserva você quer alterar?';
+  const rows = reservations.slice(0, 10).map((r, i) => ({
+    id: `${action}_pick_${r.reservationId}`,
+    title: `${i + 1}. ${r.code}`,
+    description: `${toBrDate(r.date)} ${r.time} • ${r.storeName}`
+  }));
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: title },
+      action: { button: "Ver reservas", sections: [{ title: "Reservas ativas", rows }] }
+    }
+  };
+  await sendInteractiveWithFallback(
+    to,
+    payload,
+    action === 'cancel' ? 'send_cancel_pick_menu' : 'send_alter_pick_menu',
+    `${title}\n` + reservations.map((r, i) => `${i + 1}. ${r.code} - ${toBrDate(r.date)} ${r.time} (${r.storeName})`).join('\n')
+  );
+}
+
+async function queryReservationsDeterministic(from: string): Promise<{ ok: boolean; message: string }> {
   try {
-    const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
-    const payload = parseMcpToolText(result);
-    const all = Array.isArray(payload?.reservations) ? payload.reservations : [];
-    const active = all.filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'));
-
+    const active = await fetchActiveReservations(from);
     if (active.length === 0) {
       return { ok: true, message: 'Não encontrei reservas ativas no seu número no momento.' };
     }
 
     const lines = ['Encontrei estas reservas no seu número:'];
-    active.slice(0, 5).forEach((r: any, idx: number) => {
-      const code = displayReservationCode({
-        id: r?.reservationId || r?.id,
-        code: r?.code || r?.reservationCode
-      }) || 'N/A';
+    active.slice(0, 5).forEach((r, idx) => {
       lines.push(
-        `${idx + 1}. 🔢 Código: ${code}\n` +
-        `📍 Unidade: ${r?.storeName || r?.store || 'N/A'}\n` +
-        `📅 Data: ${toBrDate(r?.date || '')}\n` +
-        `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
-        `👥 Pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
-        `✅ Status: ${statusLabel(r?.status)}`
+        `${idx + 1}. 🔢 Código: ${r.code}\n` +
+        `📍 Unidade: ${r.storeName}\n` +
+        `📅 Data: ${toBrDate(r.date)}\n` +
+        `⏰ Horário: ${r.time}\n` +
+        `👥 Pessoas: ${r.people}\n` +
+        `✅ Status: ${r.status}`
       );
     });
     lines.push('Se quiser, eu também posso cancelar ou alterar uma delas.');
@@ -489,6 +537,19 @@ async function createReservationDeterministic(from: string, state: UserState): P
     }
 
     const status = picked.status ? statusLabel(picked.status) : undefined;
+    const previousReservationId = String(r.pending_change_source_id || '').trim();
+    const previousReservationCode = String(r.pending_change_source_code || '').trim();
+
+    if (previousReservationId) {
+      try {
+        await reservasMcp.callTool('cancel_reservation', {
+          reservationId: previousReservationId,
+          reason: 'Alteração solicitada pelo cliente via WhatsApp'
+        });
+      } catch (cancelErr: any) {
+        console.error('[ReservasDeterministic] cancel old reservation after alter failed:', cancelErr?.message || cancelErr);
+      }
+    }
 
     const lines = [
       `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
@@ -497,6 +558,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `👥 Pessoas: ${people}`,
       `👶 Crianças: ${kids}`,
       displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
+      previousReservationCode ? `🔁 Alteração concluída (reserva anterior: ${previousReservationCode}).` : '',
       status ? `✅ Status: ${status}` : ''
     ].filter(Boolean);
 
@@ -773,8 +835,8 @@ async function sendCancelConfirmationMenu(to: string, reservationId: string, pre
       body: { text: preamble },
       action: {
         buttons: [
-          { type: "reply", reply: { id: `cancel_sim_${reservationId.substring(0, 8)}`, title: "Sim, cancelar ❌" } },
-          { type: "reply", reply: { id: `cancel_nao`, title: "Não, manter ✅" } }
+          { type: "reply", reply: { id: `cancel_yes_${reservationId}`, title: "Sim, cancelar ❌" } },
+          { type: "reply", reply: { id: `cancel_no`, title: "Não, manter ✅" } }
         ]
       }
     }
@@ -857,6 +919,10 @@ async function handleDeterministicCommand(
     normalized.includes('reservar mesa');
   const isReservationManageIntent =
     /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
+  const isCancelIntent =
+    /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva)\b/.test(normalized);
+  const isAlterIntent =
+    /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva)\b/.test(normalized);
   const isReservationQueryIntent =
     /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
   const timeOnlyPattern =
@@ -900,7 +966,114 @@ async function handleDeterministicCommand(
 
   // Natural language reservation intent -> traditional interactive flow
   if (isReservationManageIntent && !isInActiveFlow(state)) {
-    return false; // let agent handle query/cancel/change
+    if (isCancelIntent) {
+      const active = await fetchActiveReservations(from);
+      if (active.length === 0) {
+        await sendWhatsAppText(from, 'Não encontrei reservas ativas para cancelar no seu número.');
+        return true;
+      }
+      await sendManageReservationMenu(from, 'cancel', active);
+      return true;
+    }
+    if (isAlterIntent) {
+      const active = await fetchActiveReservations(from);
+      if (active.length === 0) {
+        await sendWhatsAppText(from, 'Não encontrei reservas ativas para alterar no seu número.');
+        return true;
+      }
+      await sendManageReservationMenu(from, 'alter', active);
+      return true;
+    }
+    return false; // query can still go to agent in other phrasings
+  }
+
+  if (text.startsWith('cancel_pick_')) {
+    const reservationId = text.replace('cancel_pick_', '').trim();
+    const active = await fetchActiveReservations(from);
+    const selected = active.find((r) => r.reservationId === reservationId);
+    if (!selected) {
+      await sendWhatsAppText(from, 'Não encontrei essa reserva para cancelar. Vou te mostrar as reservas ativas novamente.');
+      if (active.length > 0) await sendManageReservationMenu(from, 'cancel', active);
+      return true;
+    }
+    state.reservation = {
+      ...(state.reservation || {}),
+      awaiting_cancellation: true,
+      pending_cancellation_id: selected.reservationId,
+      pending_cancellation_code: selected.code
+    };
+    userStates.set(from, state);
+    await sendCancelConfirmationMenu(
+      from,
+      selected.reservationId,
+      `Confirma o cancelamento da reserva ${selected.code} (${toBrDate(selected.date)} às ${selected.time}, ${selected.storeName})?`
+    );
+    return true;
+  }
+
+  if (text.startsWith('cancel_yes_')) {
+    const reservationId = text.replace('cancel_yes_', '').trim();
+    try {
+      const mcpReady = await ensureReservasMcpReady();
+      if (!mcpReady) throw new Error('MCP not ready');
+      await reservasMcp.callTool('cancel_reservation', {
+        reservationId,
+        reason: 'Cancelamento solicitado pelo cliente via WhatsApp'
+      });
+      const code = state.reservation?.pending_cancellation_code || reservationId.substring(0, 8).toUpperCase();
+      await sendWhatsAppText(from, `Reserva ${code} cancelada com sucesso. ✅`);
+      if (state.reservation) {
+        state.reservation.awaiting_cancellation = false;
+        state.reservation.pending_cancellation_id = undefined;
+        state.reservation.pending_cancellation_code = undefined;
+      }
+      userStates.set(from, state);
+      await sendMainMenu(from, true);
+      return true;
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] cancel_reservation failed:', err?.message || err);
+      await sendWhatsAppText(from, 'Não consegui cancelar agora por instabilidade técnica. Tente novamente em alguns instantes.');
+      return true;
+    }
+  }
+
+  if (text === 'cancel_no' || text === 'cancel_nao') {
+    if (state.reservation) {
+      state.reservation.awaiting_cancellation = false;
+      state.reservation.pending_cancellation_id = undefined;
+      state.reservation.pending_cancellation_code = undefined;
+    }
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Perfeito, mantive sua reserva como está. 👍');
+    await sendMainMenu(from, true);
+    return true;
+  }
+
+  if (text.startsWith('alter_pick_')) {
+    const reservationId = text.replace('alter_pick_', '').trim();
+    const active = await fetchActiveReservations(from);
+    const selected = active.find((r) => r.reservationId === reservationId);
+    if (!selected) {
+      await sendWhatsAppText(from, 'Não encontrei essa reserva para alterar. Vou te mostrar as reservas ativas novamente.');
+      if (active.length > 0) await sendManageReservationMenu(from, 'alter', active);
+      return true;
+    }
+    state.preferred_store_id = selected.storeId || state.preferred_store_id;
+    state.preferred_unit_name = selected.storeName || state.preferred_unit_name;
+    state.reservation = {
+      ...(state.reservation || {}),
+      phone_confirmed: true,
+      contact_phone: from,
+      pending_change_source_id: selected.reservationId,
+      pending_change_source_code: selected.code,
+      awaiting_confirmation: false
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      `Perfeito! Vamos alterar a reserva ${selected.code}. Me envie em uma mensagem: data, horário, número de pessoas, crianças (se houver) e observações (opcional).`
+    );
+    return true;
   }
 
   // Natural language reservation intent -> traditional interactive flow
@@ -1292,6 +1465,11 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       text = 'confirm_reserva_sim';
     } else if (state.reservation?.awaiting_confirmation && /^(nao|não|corrigir|alterar|mudar|nao esta certo|não está certo)$/.test(textLower)) {
       text = 'confirm_reserva_nao';
+    } else if (state.reservation?.awaiting_cancellation && /^(sim|ok|confirmo|sim cancelar|pode cancelar)$/.test(textLower)) {
+      const pendingId = String(state.reservation?.pending_cancellation_id || '').trim();
+      if (pendingId) text = `cancel_yes_${pendingId}`;
+    } else if (state.reservation?.awaiting_cancellation && /^(nao|não|manter|nao cancelar|não cancelar)$/.test(textLower)) {
+      text = 'cancel_no';
     }
 
     // Try deterministic commands first
