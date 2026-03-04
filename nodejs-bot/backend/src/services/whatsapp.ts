@@ -466,13 +466,21 @@ type ReservationMatchInput = {
   people: number;
 };
 
+function extractReservationsList(payload: any): any[] {
+  if (!payload) return [];
+  if (Array.isArray(payload?.reservations)) return payload.reservations;
+  if (Array.isArray(payload?.data?.reservations)) return payload.data.reservations;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
 async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservation[]> {
   const phone = toDigitsPhone(phoneRaw);
   const mcpReady = await ensureReservasMcpReady();
   if (!mcpReady) return [];
   const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
   const payload = parseMcpToolText(result);
-  const all = Array.isArray(payload?.reservations) ? payload.reservations : [];
+  const all = extractReservationsList(payload);
   return all
     .filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'))
     .map((x: any) => ({
@@ -506,7 +514,7 @@ async function fetchActiveReservationsWithRetry(phoneRaw: string): Promise<Activ
 async function findReservationMatchWithId(input: ReservationMatchInput): Promise<{ id?: string; code?: string; status?: string } | null> {
   const verifyResult = await reservasMcp.callTool('query_reservations', { clientPhone: input.phone });
   const verifyPayload = parseMcpToolText(verifyResult);
-  const items = Array.isArray(verifyPayload?.reservations) ? verifyPayload.reservations : [];
+  const items = extractReservationsList(verifyPayload);
   const matched = items.find((x: any) =>
     normalizeIsoDate(x?.date) === input.date &&
     normalizeTime(x?.time) === input.time &&
@@ -576,7 +584,7 @@ async function queryReservationsDeterministic(from: string): Promise<{ ok: boole
     }
     const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
     const payload = parseMcpToolText(result);
-    const all = Array.isArray(payload?.reservations) ? payload.reservations : [];
+    const all = extractReservationsList(payload);
 
     if (all.length === 0) {
       return { ok: true, message: 'Não encontrei reservas no seu número no momento.' };
@@ -1118,6 +1126,7 @@ async function handleDeterministicCommand(
   profileName?: string
 ): Promise<boolean> {
   const normalized = text.trim().toLowerCase();
+  const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
@@ -1161,6 +1170,11 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, compact);
+    return true;
+  }
+
+  if (isThanks && !isInActiveFlow(state)) {
+    await sendWhatsAppText(from, 'Imagina! 😊 Sempre que precisar, estou por aqui para ajudar com reservas, cardápio ou delivery.');
     return true;
   }
 
