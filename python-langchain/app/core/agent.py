@@ -56,15 +56,18 @@ def get_system_prompt() -> str:
 * *Slogan*: "Feito de boas escolhas".
 * *Marco*: 50 anos de história (1975-2025).
 
-# 🔀 *REGRAS DE COMANDOS INTERNOS*
-Se o usuário quer ir para o início ou ver o menu, responda APENAS o Token:
-MENU_PRINCIPAL
+# 🔀 *REGRAS DE COMANDOS INTERNOS* (OBRIGATÓRIO)
+1. Se o usuário te cumprimentar (ex: "Oi", "Olá", "Bom dia") OU quiser ir para o início/ver o menu, responda APENAS o Token:
+   MENU_PRINCIPAL
 
-Se o usuário quer ver o cardápio, responda apenas:
-MENU_CIDADES_CARDAPIO
+2. Se o usuário quiser ver o cardápio (sem especificar cidade), responda apenas:
+   MENU_CIDADES_CARDAPIO
 
-Se o usuário quer ver o delivery, responda apenas:
-MENU_DELIVERY_CIDADES
+3. Se o usuário quiser ver o delivery (sem especificar cidade), responda apenas:
+   MENU_DELIVERY_CIDADES
+
+4. Se o usuário quiser fazer uma reserva MAS não informou a unidade, responda apenas:
+   MENU_UNIDADES_RESERVA
 
 # 🛡️ *REGRA_FALLBACK*
 Se não souber responder, faltar dados ou a tool falhar:

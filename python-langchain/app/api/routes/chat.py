@@ -69,6 +69,30 @@ def parse_agent_output(output: str) -> tuple[str, UIAction | None]:
             data={}
         )
         output = output.replace("MENU_PRINCIPAL", "").strip()
+
+    # Check for cardapio menu token
+    if "MENU_CIDADES_CARDAPIO" in output:
+        ui_action = UIAction(
+            type="show_cardapio_menu",
+            data={}
+        )
+        output = output.replace("MENU_CIDADES_CARDAPIO", "").strip()
+
+    # Check for delivery menu token
+    if "MENU_DELIVERY_CIDADES" in output:
+        ui_action = UIAction(
+            type="show_delivery_menu",
+            data={}
+        )
+        output = output.replace("MENU_DELIVERY_CIDADES", "").strip()
+
+    # Check for units menu token (reserva)
+    if "MENU_UNIDADES_RESERVA" in output:
+        ui_action = UIAction(
+            type="show_unidades_menu",
+            data={}
+        )
+        output = output.replace("MENU_UNIDADES_RESERVA", "").strip()
     
     # Check for cancel confirmation token
     cancel_match = re.search(r"CONFIRM_CANCEL_ID:\s*([A-Za-z0-9\-]+)", output)

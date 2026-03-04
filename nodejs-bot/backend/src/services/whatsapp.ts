@@ -107,19 +107,19 @@ function isPromptInjection(text: string): boolean {
  */
 function isLikelyBotMessage(text: string): boolean {
   if (!text) return false;
-  
+
   // Check against known bot patterns
   for (const pattern of BOT_MESSAGE_PATTERNS) {
     if (pattern.test(text.trim())) {
       return true;
     }
   }
-  
+
   // Check if contains menu structure patterns
   if (/\d️⃣\s*(ver cardápio|reservar mesa|delivery)/i.test(text)) {
     return true;
   }
-  
+
   // Check if it's a known menu button text
   const menuTexts = [
     'escolha uma opção', 'escolhe a cidade', 'qual unidade',
@@ -128,7 +128,7 @@ function isLikelyBotMessage(text: string): boolean {
   if (menuTexts.some(t => text.toLowerCase().includes(t))) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -137,7 +137,7 @@ function isLikelyBotMessage(text: string): boolean {
  */
 function extractUserInput(text: string): string {
   if (!text) return text;
-  
+
   // Remove bot message prefixes that sometimes leak through
   const botPrefixes = [
     /^(opa!? ?👋? ?eu sou a kha do kharina.*escolha uma opção:\s*)/i,
@@ -146,18 +146,18 @@ function extractUserInput(text: string): string {
     /^(qual unidade você deseja\?\s*)/i,
     /^(você quer fazer um novo pedido ou precisa de ajuda.*\?\s*)/i,
   ];
-  
+
   let cleaned = text;
   for (const prefix of botPrefixes) {
     cleaned = cleaned.replace(prefix, '');
   }
-  
+
   // Extract just the button ID if the whole menu text came through
   const buttonMatch = cleaned.match(/^(\d️⃣\s*[^\n]+)/);
   if (buttonMatch) {
     return buttonMatch[1].trim();
   }
-  
+
   return cleaned.trim();
 }
 
@@ -199,7 +199,7 @@ export async function sendWhatsAppText(to: string, text: string): Promise<void> 
   const now = Date.now();
   const DEDUPE_WINDOW_MS = 30_000;
   const last = lastOutboundByUser.get(to);
-  
+
   // Deduplication check
   if (last && last.hash === normalized && now - last.at <= DEDUPE_WINDOW_MS) {
     console.log(`[WhatsApp] Deduplicated message to ${to}: "${text.substring(0, 50)}..."`);
@@ -516,7 +516,7 @@ async function handleDeterministicCommand(
     state.preferred_city = city;
     state.has_interacted = true;
     userStates.set(from, state);
-    
+
     const link = await db.getConfig(`link_cardapio_${text.replace('cardapio_', '')}`);
     const msg = `Perfeito! Aqui está o cardápio de ${city} 🍽️\n👉 ${link || 'https://kharina.com.br/cardapio-digital/'}`;
     await sendWhatsAppText(from, msg);
@@ -548,13 +548,13 @@ async function handleDeterministicCommand(
       'delivery_saopaulo': 'São Paulo'
     };
     const city = cityMap[text];
-    
+
     if (city === 'São Paulo') {
       await sendWhatsAppText(from, "Poxa, em SP ainda não tem delivery! 😢 Mas vem visitar a gente no Shopping Parque da Cidade! 🧡");
       await sendMainMenu(from, true);
       return true;
     }
-    
+
     state.preferred_city = city;
     userStates.set(from, state);
     await sendDeliveryChoiceMenu(from);
@@ -564,7 +564,7 @@ async function handleDeterministicCommand(
   // Delivery options
   if (text === 'delivery_novo') {
     const city = state.preferred_city || 'Curitiba';
-    
+
     if (city === 'Londrina') {
       const link = await db.getConfig('link_delivery_londrina');
       await sendWhatsAppText(from, `Bora pedir! 😋\n👉 ${link || 'https://www.ifood.com.br/'}`);
@@ -586,18 +586,18 @@ async function handleDeterministicCommand(
 
   if (text === 'delivery_ajuda') {
     const city = state.preferred_city || 'Curitiba';
-    const msg = city === 'Londrina' 
+    const msg = city === 'Londrina'
       ? `Puxa, lamento pelo inconveniente! 😕\n\nPra gente resolver isso da melhor forma, entra em contato direto com a unidade de Londrina:\n📱 (43) 3398-9191`
       : [
-          'Puxa, lamento pelo inconveniente! 😕',
-          '',
-          '📍 *Cabral / Jardim Botânico*',
-          '📱 (41) 99288-6397',
-          '',
-          '📍 *Água Verde / Batel / Portão*',
-          '📱 (41) 98811-6685'
-        ].join('\n');
-    
+        'Puxa, lamento pelo inconveniente! 😕',
+        '',
+        '📍 *Cabral / Jardim Botânico*',
+        '📱 (41) 99288-6397',
+        '',
+        '📍 *Água Verde / Batel / Portão*',
+        '📱 (41) 98811-6685'
+      ].join('\n');
+
     await sendWhatsAppText(from, msg);
     await sendMainMenu(from, true);
     return true;
@@ -618,7 +618,7 @@ async function handleDeterministicCommand(
     state.preferred_unit_name = unitMap[text];
     state.reservation = { ...(state.reservation || {}), phone_confirmed: false };
     userStates.set(from, state);
-    
+
     await sendWhatsAppText(from, `Show! Você escolheu a unidade ${unitMap[text]}! 😄`);
     await sendPhoneConfirmation(from);
     return true;
@@ -630,7 +630,7 @@ async function handleDeterministicCommand(
     state.reservation.phone_confirmed = true;
     state.reservation.contact_phone = from;
     userStates.set(from, state);
-    
+
     const msg = `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nMe conta: quantas pessoas e para quando?`;
     await sendWhatsAppText(from, msg);
     return true;
@@ -665,7 +665,7 @@ export const verifyWebhook = (req: Request, res: Response) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  
+
   if (mode === 'subscribe' && token === config.whatsapp.verifyToken) {
     console.log('Webhook verified');
     res.status(200).send(challenge);
@@ -854,6 +854,18 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
           await sendMainMenu(from, !!state.has_interacted);
           state.reservation = undefined;
           userStates.set(from, state);
+          break;
+
+        case 'show_cardapio_menu':
+          await sendCitiesMenu(from);
+          break;
+
+        case 'show_delivery_menu':
+          await sendDeliveryCitiesMenu(from);
+          break;
+
+        case 'show_unidades_menu':
+          await sendUnidadesMenu(from);
           break;
 
         case 'show_cancel_confirmation':
