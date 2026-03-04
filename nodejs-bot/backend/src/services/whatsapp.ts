@@ -56,6 +56,15 @@ const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio,
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery']);
 const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite']);
+const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
+  unidade_botanico: { name: 'Jardim Botânico', storeId: 'a99c098f-c16b-4168-a5b1-54e76aa1a855' },
+  unidade_cabral: { name: 'Cabral', storeId: 'c6919b3c-f5ff-4006-a226-2b493d9d8cf5' },
+  unidade_agua_verde: { name: 'Água Verde', storeId: 'fde9ba37-baff-4958-b6be-5ced7059864c' },
+  unidade_batel: { name: 'Batel', storeId: 'b45c9b5e-4f79-47b1-a442-ea8fb9d6e977' },
+  unidade_portao: { name: 'Portão', storeId: 'f0f6ae17-01d1-4c51-a423-33222f8fcd5c' },
+  unidade_londrina: { name: 'Londrina', storeId: '3e027375-3049-4080-98c3-9f7448b8fd62' },
+  unidade_saopaulo: { name: 'São Paulo', storeId: '03dc5466-6c32-4e9e-b92f-c8b02e74bba6' }
+};
 
 // Bot message patterns to ignore (echo detection)
 const BOT_MESSAGE_PATTERNS = [
@@ -742,22 +751,13 @@ async function handleDeterministicCommand(
   }
 
   // Unidade selection
-  const unitMap: Record<string, string> = {
-    'unidade_botanico': 'Jardim Botânico',
-    'unidade_cabral': 'Cabral',
-    'unidade_agua_verde': 'Água Verde',
-    'unidade_batel': 'Batel',
-    'unidade_portao': 'Portão',
-    'unidade_londrina': 'Londrina',
-    'unidade_saopaulo': 'São Paulo'
-  };
-
-  if (unitMap[text]) {
-    state.preferred_unit_name = unitMap[text];
+  if (UNIT_CONFIG[text]) {
+    state.preferred_unit_name = UNIT_CONFIG[text].name;
+    state.preferred_store_id = UNIT_CONFIG[text].storeId;
     state.reservation = { ...(state.reservation || {}), phone_confirmed: false };
     userStates.set(from, state);
 
-    await sendWhatsAppText(from, `Show! Você escolheu a unidade ${unitMap[text]}! 😄`);
+    await sendWhatsAppText(from, `Show! Você escolheu a unidade ${UNIT_CONFIG[text].name}! 😄`);
     await sendPhoneConfirmation(from);
     return true;
   }
@@ -799,6 +799,7 @@ async function handleDeterministicCommand(
 
   // Confirmation buttons
   if (text === 'confirm_reserva_sim') {
+    await sendWhatsAppText(from, 'Perfeito! ✅ Estou verificando sua reserva agora, só um instante...');
     return false; // Let Python agent handle
   }
 
@@ -1035,7 +1036,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       reservation_state: state.reservation
     }, {
       // Confirmation can involve slower MCP operations (availability/create).
-      timeoutMs: text === 'confirm_reserva_sim' ? 25000 : undefined
+      timeoutMs: text === 'confirm_reserva_sim' ? 40000 : undefined
     });
     logStep('langchain.processMessage', langchainStart);
 
