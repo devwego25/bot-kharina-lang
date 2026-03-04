@@ -1416,7 +1416,12 @@ async function handleDeterministicCommand(
         state.reservation.pending_cancellation_code = undefined;
       }
       userStates.set(from, state);
-      await sendWhatsAppText(from, 'Se quiser, posso cancelar outra reserva ou te ajudar com uma nova. 🙂');
+      const remainingActive = await fetchActiveReservationsWithRetry(from);
+      if (remainingActive.length > 0) {
+        await sendWhatsAppText(from, 'Se quiser, posso cancelar outra reserva ou te ajudar com uma nova. 🙂');
+      } else {
+        await sendWhatsAppText(from, 'Se quiser, posso te ajudar a fazer uma nova reserva ou com qualquer outra coisa. 🙂');
+      }
       return true;
     } catch (err: any) {
       console.error('[ReservasDeterministic] cancel_reservation failed:', err?.message || err);
