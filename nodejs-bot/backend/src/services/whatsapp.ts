@@ -280,11 +280,15 @@ async function postGraphMessage(payload: any, label: string, retries = 2): Promi
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      await axios.post(
+      const resp = await axios.post(
         `https://graph.facebook.com/v24.0/${config.whatsapp.phoneId}/messages`,
         payload,
         axiosConfig
       );
+      const graphMsgId = (resp?.data as any)?.messages?.[0]?.id;
+      if (graphMsgId) {
+        console.log(`[WhatsApp] ${label} Graph message id: ${graphMsgId}`);
+      }
       return;
     } catch (err: any) {
       lastErr = err;
