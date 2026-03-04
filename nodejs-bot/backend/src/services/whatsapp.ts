@@ -455,6 +455,14 @@ type ActiveReservation = {
   status: string;
 };
 
+type ReservationMatchInput = {
+  phone: string;
+  storeId: string;
+  date: string;
+  time: string;
+  people: number;
+};
+
 async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservation[]> {
   const phone = toDigitsPhone(phoneRaw);
   const mcpReady = await ensureReservasMcpReady();
@@ -490,6 +498,45 @@ async function fetchActiveReservationsWithRetry(phoneRaw: string): Promise<Activ
       return [];
     }
   }
+}
+
+async function findReservationMatchWithId(input: ReservationMatchInput): Promise<{ id?: string; code?: string; status?: string } | null> {
+  const verifyResult = await reservasMcp.callTool('query_reservations', { clientPhone: input.phone });
+  const verifyPayload = parseMcpToolText(verifyResult);
+  const items = Array.isArray(verifyPayload?.reservations) ? verifyPayload.reservations : [];
+  const matched = items.find((x: any) =>
+    normalizeIsoDate(x?.date) === input.date &&
+    normalizeTime(x?.time) === input.time &&
+    Number(x?.numberOfPeople || x?.people) === input.people &&
+    String(x?.storeId || '').toLowerCase() === String(input.storeId).toLowerCase() &&
+    !String(x?.status || '').toLowerCase().includes('cancel')
+  );
+  if (!matched) return null;
+
+  const id = matched.reservationId || matched.id;
+  if (!id) return null;
+  return {
+    id,
+    code: matched.code || matched.reservationCode,
+    status: matched.status
+  };
+}
+
+async function waitForReservationMatchWithId(
+  input: ReservationMatchInput,
+  attempts = 6,
+  intervalMs = 1500
+): Promise<{ id?: string; code?: string; status?: string } | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const hit = await findReservationMatchWithId(input);
+      if (hit?.id) return hit;
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] wait match attempt failed:', err?.message || err);
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return null;
 }
 
 async function sendManageReservationMenu(to: string, action: 'cancel' | 'alter', reservations: ActiveReservation[]): Promise<void> {
@@ -593,6 +640,25 @@ async function createReservationDeterministic(from: string, state: UserState): P
   };
 
   try {
+    // If client pressed confirm again, avoid duplicate creates and try to recover existing reservation first.
+    const preExisting = await waitForReservationMatchWithId({ phone, storeId, date, time, people }, 2, 600);
+    if (preExisting?.id) {
+      const recoveredCode = displayReservationCode(preExisting);
+      const recoveredStatus = preExisting.status ? statusLabel(preExisting.status) : undefined;
+      const recoveredLines = [
+        `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
+        `📅 Data: ${toBrDate(date)}`,
+        `⏰ Horário: ${time}`,
+        `👥 Pessoas: ${people}`,
+        `👶 Crianças: ${kids}`,
+        recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : `🆔 ID da reserva: ${preExisting.id}`,
+        recoveredStatus ? `✅ Status: ${recoveredStatus}` : ''
+      ].filter(Boolean);
+      state.reservation = undefined;
+      userStates.set(from, state);
+      return { ok: true, message: recoveredLines.join('\n') };
+    }
+
     let createResult: any;
     try {
       createResult = await reservasMcp.callTool('create_reservation', createArgs);
@@ -612,22 +678,13 @@ async function createReservationDeterministic(from: string, state: UserState): P
 
     let picked = pickReservationCode(createResult);
 
-    // Silent verification to prevent false positives.
-    const verifyResult = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
-    const verifyPayload = parseMcpToolText(verifyResult);
-    const items = Array.isArray(verifyPayload?.reservations) ? verifyPayload.reservations : [];
-    const matched = items.find((x: any) =>
-      normalizeIsoDate(x?.date) === date &&
-      normalizeTime(x?.time) === time &&
-      Number(x?.numberOfPeople || x?.people) === people &&
-      String(x?.storeId || '').toLowerCase() === String(storeId).toLowerCase() &&
-      !String(x?.status || '').toLowerCase().includes('cancel')
-    );
+    // Poll verification for eventual consistency in Reservas API.
+    const matched = await waitForReservationMatchWithId({ phone, storeId, date, time, people }, 8, 1500);
 
     if (matched) {
       picked = {
-        id: matched.reservationId || matched.id || picked.id,
-        code: matched.code || matched.reservationCode || picked.code,
+        id: matched.id || picked.id,
+        code: matched.code || picked.code,
         status: matched.status || picked.status
       };
     }
