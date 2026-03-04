@@ -745,7 +745,8 @@ async function createReservationDeterministic(from: string, state: UserState): P
         `👨 Adultos: ${adults}`,
         `👶 Crianças: ${kids}`,
         `👥 Total: ${totalPeople}`,
-        recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : `🆔 ID da reserva: ${preExisting.id}`,
+        recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : '',
+        preExisting.id ? `🆔 ID da reserva: ${preExisting.id}` : '',
         recoveredStatus ? `${statusEmoji(preExisting.status)} Status: ${recoveredStatus}` : ''
       ].filter(Boolean);
       state.reservation = undefined;
@@ -836,6 +837,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `👶 Crianças: ${kids}`,
       `👥 Total: ${totalPeople}`,
       displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
+      picked.id ? `🆔 ID da reserva: ${picked.id}` : '',
       previousReservationCode ? `🔁 Alteração concluída (reserva anterior: ${previousReservationCode}).` : '',
       status ? `${statusEmoji(picked.status)} Status: ${status}` : ''
     ].filter(Boolean);
