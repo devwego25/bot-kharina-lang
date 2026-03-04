@@ -10,7 +10,7 @@ import { seedConfigs } from './services/seed';
 const app = express();
 
 function renderLegalPage(title: string, contentHtml: string) {
-    return `<!doctype html>
+  return `<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
@@ -46,17 +46,18 @@ app.use(express.urlencoded({ extended: true }));
 
 // ─── Health Check Endpoints ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
-    const langchainHealthy = await langchainService.healthCheck();
-    res.status(langchainHealthy ? 200 : 503).json({
-        status: langchainHealthy ? 'healthy' : 'degraded',
-        service: 'kharina-backend',
-        langchain: langchainHealthy ? 'connected' : 'disconnected',
-        timestamp: new Date().toISOString()
-    });
+  const langchainHealthy = await langchainService.healthCheck();
+  // Return 200 even if degraded to prevent task restart loops during startup
+  res.status(200).json({
+    status: langchainHealthy ? 'healthy' : 'degraded',
+    service: 'kharina-backend',
+    langchain: langchainHealthy ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/ready', (_req, res) => {
-    res.status(200).json({ ready: true });
+  res.status(200).json({ ready: true });
 });
 
 // ─── WhatsApp Webhook ───────────────────────────────────────────────────
@@ -69,13 +70,13 @@ app.use('/api/config', configRoutes);
 
 // ─── Legal Pages ────────────────────────────────────────────────────────
 app.get('/politica-privacidade-whatsapp', (_req, res) => {
-    res
-        .status(200)
-        .type('html')
-        .send(
-            renderLegalPage(
-                'Política de Privacidade - Atendimento via WhatsApp',
-                `
+  res
+    .status(200)
+    .type('html')
+    .send(
+      renderLegalPage(
+        'Política de Privacidade - Atendimento via WhatsApp',
+        `
                 <p class="muted">Última atualização: 15/02/2026</p>
                 <p>Esta política descreve como tratamos dados pessoais no atendimento do Kharina via WhatsApp.</p>
                 <h2>1. Dados coletados</h2>
@@ -99,18 +100,18 @@ app.get('/politica-privacidade-whatsapp', (_req, res) => {
                 <p>Você pode solicitar acesso, correção ou exclusão dos seus dados entrando em contato pelo e-mail: <a href="mailto:lgpd@kharina.com.br">lgpd@kharina.com.br</a>.</p>
                 <p class="muted">Dúvidas? Fale conosco: (41) 3014-5777</p>
                 `
-            )
-        );
+      )
+    );
 });
 
 app.get('/termos-de-uso-whatsapp', (_req, res) => {
-    res
-        .status(200)
-        .type('html')
-        .send(
-            renderLegalPage(
-                'Termos de Uso - Atendimento via WhatsApp',
-                `
+  res
+    .status(200)
+    .type('html')
+    .send(
+      renderLegalPage(
+        'Termos de Uso - Atendimento via WhatsApp',
+        `
                 <p class="muted">Última atualização: 15/02/2026</p>
                 <p>Ao iniciar um atendimento via WhatsApp, você concorda com estes termos.</p>
                 <h2>1. Serviço</h2>
@@ -127,14 +128,14 @@ app.get('/termos-de-uso-whatsapp', (_req, res) => {
                 <p>Podemos atualizar estes termos periodicamente. Continuar usando o serviço após alterações implica na aceitação das novas condições.</p>
                 <p class="muted">Dúvidas? Fale conosco: (41) 3014-5777</p>
                 `
-            )
-        );
+      )
+    );
 });
 
 // ─── Start Server ───────────────────────────────────────────────────────
 const PORT = config.port || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Kharina Backend running on port ${PORT}`);
-    console.log(`🔗 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🤖 LangChain Service: ${process.env.LANGCHAIN_URL || 'http://localhost:8000'}`);
+  console.log(`🚀 Kharina Backend running on port ${PORT}`);
+  console.log(`🔗 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🤖 LangChain Service: ${process.env.LANGCHAIN_URL || 'http://localhost:8000'}`);
 });

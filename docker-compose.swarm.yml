@@ -22,7 +22,7 @@ services:
       - LOG_LEVEL=INFO
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
-      - NO_PROXY=langchain,${NO_PROXY}
+      - NO_PROXY=langchain,kharina-bot-v2_langchain,redis,kharina-bot-v2_redis,cardapio_app,localhost,127.0.0.1,${NO_PROXY}
     networks:
       - kharina-network
       - KharinaNet  # To reach cardapio_app
@@ -32,13 +32,6 @@ services:
         condition: on-failure
         delay: 5s
         max_attempts: 3
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 128M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -72,7 +65,7 @@ services:
       - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
-      - NO_PROXY=langchain,${NO_PROXY}
+      - NO_PROXY=langchain,kharina-bot-v2_langchain,redis,kharina-bot-v2_redis,cardapio_app,localhost,127.0.0.1,${NO_PROXY}
     networks:
       - kharina-network
       - KharinaNet
@@ -108,10 +101,6 @@ services:
       replicas: 1
       restart_policy:
         condition: on-failure
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
 
 networks:
   kharina-network:
