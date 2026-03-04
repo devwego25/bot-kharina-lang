@@ -35,6 +35,7 @@ interface ReservationState {
   pending_change_source_code?: string;
   pending_cancellation_id?: string;
   pending_cancellation_code?: string;
+  pending_cancellation_all_ids?: string[];
 }
 
 interface UserState {
@@ -1079,6 +1080,27 @@ async function sendCancelConfirmationMenu(to: string, reservationId: string, pre
     `${preamble} Responda "Sim, cancelar" ou "Não".`);
 }
 
+async function sendCancelAllConfirmationMenu(to: string, count: number): Promise<void> {
+  const preamble = `Confirma o cancelamento de *todas* as suas reservas ativas (${count})?`;
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: preamble },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "cancel_all_yes", title: "Sim, cancelar todas ❌" } },
+          { type: "reply", reply: { id: "cancel_all_no", title: "Não, manter ✅" } }
+        ]
+      }
+    }
+  };
+  await sendInteractiveWithFallback(to, payload, 'send_cancel_all_confirmation',
+    `${preamble} Responda "Sim, cancelar todas" ou "Não".`);
+}
+
 async function sendDeliveryChoiceMenu(to: string): Promise<void> {
   const payload = {
     messaging_product: "whatsapp",
@@ -1156,6 +1178,8 @@ async function handleDeterministicCommand(
     /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
   const isCancelIntent =
     /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva|nao vou poder ir|não vou poder ir)\b/.test(normalized);
+  const isCancelAllIntent =
+    /\b(cancel(a|ar).*(todas|tudo)|todas as reservas|cancelar tudo)\b/.test(normalized);
   const isAlterIntent =
     /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva|trocar|troca|outro dia|nova data|tenho que alterar|preciso alterar|vamos alterar|quero trocar)\b/.test(normalized);
   const isReservationQueryIntent =
@@ -1209,6 +1233,16 @@ async function handleDeterministicCommand(
       const active = await fetchActiveReservationsWithRetry(from);
       if (active.length === 0) {
         await sendWhatsAppText(from, 'Não consegui localizar uma reserva ativa para cancelar agora. Se você acabou de confirmar, aguarde 1 minuto e me peça novamente para cancelar.');
+        return true;
+      }
+      if (isCancelAllIntent) {
+        state.reservation = {
+          ...(state.reservation || {}),
+          awaiting_cancellation: true,
+          pending_cancellation_all_ids: active.map((r) => r.reservationId)
+        };
+        userStates.set(from, state);
+        await sendCancelAllConfirmationMenu(from, active.length);
         return true;
       }
       await sendManageReservationMenu(from, 'cancel', active);
@@ -1267,7 +1301,7 @@ async function handleDeterministicCommand(
         state.reservation.pending_cancellation_code = undefined;
       }
       userStates.set(from, state);
-      await sendMainMenu(from, true);
+      await sendWhatsAppText(from, 'Se quiser, posso cancelar outra reserva ou te ajudar com uma nova. 🙂');
       return true;
     } catch (err: any) {
       console.error('[ReservasDeterministic] cancel_reservation failed:', err?.message || err);
@@ -1284,7 +1318,57 @@ async function handleDeterministicCommand(
     }
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Perfeito, mantive sua reserva como está. 👍');
-    await sendMainMenu(from, true);
+    await sendWhatsAppText(from, 'Se quiser, posso te mostrar suas reservas ativas novamente.');
+    return true;
+  }
+
+  if (text === 'cancel_all_yes') {
+    const ids = (state.reservation?.pending_cancellation_all_ids || []).filter(Boolean);
+    if (ids.length === 0) {
+      await sendWhatsAppText(from, 'Não encontrei reservas pendentes para esse cancelamento em lote. Pode pedir novamente que eu consulto.');
+      return true;
+    }
+    let cancelled = 0;
+    try {
+      const mcpReady = await ensureReservasMcpReady();
+      if (!mcpReady) throw new Error('MCP not ready');
+      for (const reservationId of ids) {
+        try {
+          await reservasMcp.callTool('cancel_reservation', {
+            reservationId,
+            reason: 'Cancelamento em lote solicitado pelo cliente via WhatsApp'
+          });
+          cancelled += 1;
+        } catch (err: any) {
+          console.error('[ReservasDeterministic] cancel_all item failed:', reservationId, err?.message || err);
+        }
+      }
+      if (state.reservation) {
+        state.reservation.awaiting_cancellation = false;
+        state.reservation.pending_cancellation_all_ids = undefined;
+        state.reservation.pending_cancellation_id = undefined;
+        state.reservation.pending_cancellation_code = undefined;
+      }
+      userStates.set(from, state);
+      await sendWhatsAppText(from, `Concluído ✅ Cancelei ${cancelled} de ${ids.length} reservas ativas.`);
+      await sendWhatsAppText(from, 'Se quiser, posso verificar se ainda restou alguma ativa.');
+      return true;
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] cancel_all failed:', err?.message || err);
+      await sendWhatsAppText(from, 'Não consegui concluir o cancelamento em lote agora por instabilidade técnica. Tente novamente em instantes.');
+      return true;
+    }
+  }
+
+  if (text === 'cancel_all_no') {
+    if (state.reservation) {
+      state.reservation.awaiting_cancellation = false;
+      state.reservation.pending_cancellation_all_ids = undefined;
+      state.reservation.pending_cancellation_id = undefined;
+      state.reservation.pending_cancellation_code = undefined;
+    }
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Perfeito, não cancelei as reservas. 👍');
     return true;
   }
 
