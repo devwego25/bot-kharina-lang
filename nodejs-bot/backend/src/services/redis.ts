@@ -61,19 +61,22 @@ export const redisService = {
   },
 
   /**
-   * Content-based dedup: blocks same text from same user within 30s.
+   * Content-based dedup: blocks accidental duplicates in a short window.
    * Returns true if this is a duplicate (should be skipped).
    */
   isDuplicateContent: async (userId: string, text: string): Promise<boolean> => {
     try {
       if (!text || text.trim().length === 0) return false;
+      const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
+
+      // Don't dedupe very short messages; users often repeat "oi", "ok", etc.
+      if (normalized.length <= 3) return false;
       
       // Create a hash from userId + normalized text
-      const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
       const key = `cdedup:${userId}:${normalized}`;
       
-      // Try to set with NX (only if not exists) and 30s TTL
-      const result = await redis.set(key, '1', 'EX', 30, 'NX');
+      // Try to set with NX (only if not exists) and 5s TTL
+      const result = await redis.set(key, '1', 'EX', 5, 'NX');
       
       // If result is null, key already existed (duplicate)
       return result !== 'OK';
