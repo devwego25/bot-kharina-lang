@@ -572,6 +572,7 @@ async function handleDeterministicCommand(
     const link = await db.getConfig(`link_cardapio_${text.replace('cardapio_', '')}`);
     const msg = `Perfeito! Aqui está o cardápio de ${city} 🍽️\n👉 ${link || 'https://kharina.com.br/cardapio-digital/'}`;
     await sendWhatsAppText(from, msg);
+    await sendMainMenu(from, true);
     return true;
   }
 
