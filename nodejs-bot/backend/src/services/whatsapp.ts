@@ -616,6 +616,15 @@ async function handleDeterministicCommand(
     /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
     !/\b\d+\s*(pessoa|pessoas|adulto|adultos)\b/.test(normalized);
 
+  // If waiting final confirmation, keep user inside confirmation state.
+  if (state.reservation?.awaiting_confirmation && text !== 'confirm_reserva_sim' && text !== 'confirm_reserva_nao') {
+    if (isGreeting || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
+      await sendWhatsAppText(from, 'Estamos quase lá 😊 Para concluir, confirme os dados da reserva no botão abaixo.');
+      await sendConfirmationMenu(from, state);
+      return true;
+    }
+  }
+
   // Main menu
   if (text === 'MENU_PRINCIPAL' || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
     state.reservation = undefined;
@@ -1016,6 +1025,8 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     const textLower = text.toLowerCase().trim();
     if (state.reservation?.awaiting_confirmation && /^(sim|ok|confirmo|pode confirmar|tudo certo|esta tudo certo|está tudo certo)$/.test(textLower)) {
       text = 'confirm_reserva_sim';
+    } else if (state.reservation?.awaiting_confirmation && /^(nao|não|corrigir|alterar|mudar|nao esta certo|não está certo)$/.test(textLower)) {
+      text = 'confirm_reserva_nao';
     }
 
     // Try deterministic commands first
