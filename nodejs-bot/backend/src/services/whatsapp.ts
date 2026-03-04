@@ -114,6 +114,16 @@ function toIsoDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function nextWeekdayDate(targetWeekday: number, fromDate: Date = new Date()): Date {
+  const base = new Date(fromDate);
+  base.setHours(0, 0, 0, 0);
+  const todayWeekday = base.getDay();
+  let diff = (targetWeekday - todayWeekday + 7) % 7;
+  if (diff === 0) diff = 7;
+  base.setDate(base.getDate() + diff);
+  return base;
+}
+
 function toBrDate(isoOrBr: string): string {
   const v = String(isoOrBr || '').trim();
   const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -152,6 +162,22 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     d.setDate(d.getDate() + 1);
     updates.date_text = toIsoDate(d);
   } else {
+    const weekdayMap: Array<{ rx: RegExp; day: number }> = [
+      { rx: /\b(domingo)\b/, day: 0 },
+      { rx: /\b(segunda|segunda-feira)\b/, day: 1 },
+      { rx: /\b(terca|terça|terca-feira|terça-feira)\b/, day: 2 },
+      { rx: /\b(quarta|quarta-feira)\b/, day: 3 },
+      { rx: /\b(quinta|quinta-feira)\b/, day: 4 },
+      { rx: /\b(sexta|sexta-feira)\b/, day: 5 },
+      { rx: /\b(sabado|sábado)\b/, day: 6 }
+    ];
+    const byWeekday = weekdayMap.find((w) => w.rx.test(t));
+    if (byWeekday) {
+      updates.date_text = toIsoDate(nextWeekdayDate(byWeekday.day, today));
+    }
+  }
+
+  if (!updates.date_text) {
     const dmY = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
     if (dmY) {
       const day = parseInt(dmY[1], 10);
@@ -448,23 +474,38 @@ async function sendManageReservationMenu(to: string, action: 'cancel' | 'alter',
 
 async function queryReservationsDeterministic(from: string): Promise<{ ok: boolean; message: string }> {
   try {
-    const active = await fetchActiveReservations(from);
-    if (active.length === 0) {
-      return { ok: true, message: 'Não encontrei reservas ativas no seu número no momento.' };
+    const phone = toDigitsPhone(from);
+    const mcpReady = await ensureReservasMcpReady();
+    if (!mcpReady) {
+      return { ok: false, message: 'Tive uma instabilidade para consultar suas reservas agora 😕' };
+    }
+    const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
+    const payload = parseMcpToolText(result);
+    const all = Array.isArray(payload?.reservations) ? payload.reservations : [];
+
+    if (all.length === 0) {
+      return { ok: true, message: 'Não encontrei reservas no seu número no momento.' };
     }
 
     const lines = ['Encontrei estas reservas no seu número:'];
-    active.slice(0, 5).forEach((r, idx) => {
+    all.slice(0, 8).forEach((r: any, idx: number) => {
+      const code = displayReservationCode({
+        id: r?.reservationId || r?.id,
+        code: r?.code || r?.reservationCode
+      }) || 'N/A';
       lines.push(
-        `${idx + 1}. 🔢 Código: ${r.code}\n` +
-        `📍 Unidade: ${r.storeName}\n` +
-        `📅 Data: ${toBrDate(r.date)}\n` +
-        `⏰ Horário: ${r.time}\n` +
-        `👥 Pessoas: ${r.people}\n` +
-        `✅ Status: ${r.status}`
+        `${idx + 1}. 🔢 Código: ${code}\n` +
+        `📍 Unidade: ${r?.storeName || r?.store || 'N/A'}\n` +
+        `📅 Data: ${toBrDate(r?.date || '')}\n` +
+        `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
+        `👥 Pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
+        `✅ Status: ${statusLabel(r?.status)}`
       );
     });
-    lines.push('Se quiser, eu também posso cancelar ou alterar uma delas.');
+    const hasActive = all.some((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'));
+    lines.push(hasActive
+      ? 'Se quiser, eu também posso cancelar ou alterar uma reserva ativa.'
+      : 'No momento, todas as reservas listadas estão canceladas.');
     return { ok: true, message: lines.join('\n\n') };
   } catch (err: any) {
     console.error('[ReservasDeterministic] query_reservations failed:', err?.message || err);
