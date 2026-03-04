@@ -3,9 +3,10 @@ import { db } from './db';
 const initialConfigs = [
     { key: 'link_delivery_curitiba', value: 'https://www.ifood.com.br/delivery/curitiba-pr/kharina-agua-verde/9cda85cb-fa38-47a1-9831-818dfe5991e9?UTM_Medium=share' },
     { key: 'link_delivery_londrina', value: 'https://www.ifood.com.br/delivery/londrina-pr/kharina-londrina-centro/4c717d38-1310-49a8-8a9b-429389078b33?UTM_Medium=share' },
-    { key: 'link_cardapio_curitiba', value: 'https://cardapio.kharina.com.br/' },
-    { key: 'link_cardapio_londrina', value: 'https://cardapio.kharina.com.br/' },
-    { key: 'link_cardapio_sp', value: 'https://cardapio.kharina.com.br/' },
+    { key: 'link_cardapio_curitiba', value: 'https://cardapio.kharina.com.br/curitiba' },
+    { key: 'link_cardapio_londrina', value: 'https://cardapio.kharina.com.br/londrina' },
+    { key: 'link_cardapio_saopaulo', value: 'https://cardapio.kharina.com.br/saopaulo' },
+    { key: 'link_cardapio_sp', value: 'https://cardapio.kharina.com.br/saopaulo' },
     { key: 'uuid_botanico', value: 'a99c098f-c16b-4168-a5b1-54e76aa1a855' },
     { key: 'uuid_cabral', value: 'c6919b3c-f5ff-4006-a226-2b493d9d8cf5' },
     { key: 'uuid_agua_verde', value: 'fde9ba37-baff-4958-b6be-5ced7059864c' },

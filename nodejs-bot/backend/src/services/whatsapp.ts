@@ -410,7 +410,8 @@ async function buildCardapioMessage(cardapioCommand: string): Promise<string> {
     saopaulo: 'São Paulo'
   };
   const dynamic = await db.getConfig(`link_cardapio_${city}`);
-  const url = dynamic || baseMap[city] || 'https://cardapio.kharina.com.br/';
+  const legacySp = city === 'saopaulo' ? await db.getConfig('link_cardapio_sp') : null;
+  const url = dynamic || legacySp || baseMap[city] || 'https://cardapio.kharina.com.br/';
   return `Perfeito! Aqui está o cardápio de ${cityLabelMap[city] || city} 🍽️\n👉 ${url}`;
 }
 
