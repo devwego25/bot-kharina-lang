@@ -530,11 +530,12 @@ async function handleDeterministicCommand(
     return true;
   }
 
-  // First contact greeting -> open main menu immediately
-  if (isGreeting && !state.has_interacted && !isInActiveFlow(state)) {
+  // Greeting outside active flow -> open main menu immediately
+  if (isGreeting && !isInActiveFlow(state)) {
+    const compact = !!state.has_interacted;
     state.has_interacted = true;
     userStates.set(from, state);
-    await sendMainMenu(from, false);
+    await sendMainMenu(from, compact);
     return true;
   }
 
