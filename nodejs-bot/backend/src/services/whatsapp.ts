@@ -403,7 +403,7 @@ function pickReservationCode(res: any): { id?: string; code?: string; status?: s
   if (!payload || typeof payload !== 'object') return {};
   return {
     id: payload.reservationId || payload.id || payload.data?.id,
-    code: payload.code || payload.reservationCode || payload.data?.code,
+    code: payload.code || payload.reservationCode || payload.confirmationCode || payload.data?.code || payload.data?.confirmationCode,
     status: payload.status || payload.data?.status
   };
 }
@@ -474,7 +474,7 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
     .filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'))
     .map((x: any) => ({
       reservationId: String(x?.reservationId || x?.id || ''),
-      code: displayReservationCode({ id: x?.reservationId || x?.id, code: x?.code || x?.reservationCode }) || 'N/A',
+      code: displayReservationCode({ id: x?.reservationId || x?.id, code: x?.code || x?.reservationCode || x?.confirmationCode }) || 'N/A',
       storeId: String(x?.storeId || ''),
       storeName: String(x?.storeName || x?.store || 'N/A'),
       date: String(x?.date || ''),
@@ -517,7 +517,7 @@ async function findReservationMatchWithId(input: ReservationMatchInput): Promise
   if (!id) return null;
   return {
     id,
-    code: matched.code || matched.reservationCode,
+    code: matched.code || matched.reservationCode || matched.confirmationCode,
     status: matched.status
   };
 }
@@ -583,7 +583,7 @@ async function queryReservationsDeterministic(from: string): Promise<{ ok: boole
     all.slice(0, 8).forEach((r: any, idx: number) => {
       const code = displayReservationCode({
         id: r?.reservationId || r?.id,
-        code: r?.code || r?.reservationCode
+        code: r?.code || r?.reservationCode || r?.confirmationCode
       }) || 'N/A';
       lines.push(
         `${idx + 1}. 🔢 Código: ${code}\n` +
