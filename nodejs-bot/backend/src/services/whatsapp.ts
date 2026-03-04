@@ -94,11 +94,15 @@ function sanitizeWhatsAppText(text: string): string {
     .trim();
 }
 
-function shouldOfferMainMenu(result: any): boolean {
+function shouldOfferMainMenu(result: any, state?: UserState): boolean {
   const intent = String(result?.intent || '').toLowerCase();
   const response = String(result?.response || '').toLowerCase();
 
-  if (intent === 'error') return true;
+  if (intent === 'error') {
+    // Don't reset to main menu if user is in the middle of reservation flow.
+    if (isInActiveFlow(state)) return false;
+    return true;
+  }
 
   const noReservationHints = [
     'não possui reservas ativas',
@@ -985,7 +989,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
           console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
         });
 
-        if (shouldOfferMainMenu(result)) {
+        if (shouldOfferMainMenu(result, state)) {
           await sendMainMenu(from, true);
           chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' }).catch((err) => {
             console.error(`[Chatwoot] async outgoing menu sync failed for ${from}:`, err?.message || err);

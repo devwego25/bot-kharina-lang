@@ -290,4 +290,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
         
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return ChatResponse(
+            response=(
+                "Tive uma instabilidade para verificar a disponibilidade agora 😕\n"
+                "Vamos continuar rapidinho: me confirma *quantas pessoas* e eu tento novamente."
+            ),
+            intent="error",
+            tool_called=None,
+            ui_action=None,
+            state_updates={"last_intent": "error"},
+        )
