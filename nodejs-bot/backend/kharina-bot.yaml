@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  backend:
+    image: kharina-bot-backend:latest
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - /root/kharina-bot/.env
+    volumes:
+      - /root/kharina-bot/prompt.md:/app/prompt.md
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+      - "pgvector:172.17.0.1"
+    networks:
+      - default
+      - KharinaNet
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.kharina_backend.rule=(Host(`chatbot.kharina.com.br`) && PathPrefix(`/webhook`))"
+        - "traefik.http.routers.kharina_backend.entrypoints=websecure"
+        - "traefik.http.routers.kharina_backend.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.kharina_backend.loadbalancer.server.port=3000"
+        - "traefik.docker.network=KharinaNet"
+
+  redis:
+    image: redis:7-alpine
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+    networks:
+      - default
+
+networks:
+  default:
+  KharinaNet:
+    external: true

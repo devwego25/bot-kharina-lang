@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: .
+    container_name: kharina_backend
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prompt.md:/app/prompt.md
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: kharina_redis
+    restart: always

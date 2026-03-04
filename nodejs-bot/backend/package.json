@@ -1,0 +1,40 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "nodemon src/server.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@openai/agents": "^0.4.8",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.2.3",
+    "axios": "^1.13.5",
+    "dotenv": "^17.2.4",
+    "eventsource": "^4.1.0",
+    "express": "^5.2.1",
+    "https-proxy-agent": "^7.0.6",
+    "ioredis": "^5.9.2",
+    "nodemon": "^3.1.11",
+    "openai": "^6.21.0",
+    "pg": "^8.18.0",
+    "socks-proxy-agent": "^8.0.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.9.36",
+    "@types/eventsource": "^1.1.15",
+    "@types/ioredis": "^4.28.10",
+    "@types/pg": "^8.16.0"
+  }
+}

@@ -1,0 +1,246 @@
+openapi: 3.1.0
+info:
+  title: Kharina Chatbot API
+  description: API para gerenciamento de configurações, prompt da IA e envio de mensagens do bot Kharina.
+  version: 1.0.0
+servers:
+  - url: http://72.60.137.167:3005
+    description: VPS Produção (IP Direto)
+  - url: https://chatbot.kharina.com.br
+    description: Produção (Domínio)
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: Chave de autenticação configurada no .env (ADMIN_API_KEY).
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /api/admin/validate:
+    get:
+      summary: Validar API Key
+      tags: [Admin]
+      responses:
+        '200':
+          description: Key válida
+          content:
+            application/json:
+              example:
+                valid: true
+                message: "API Key is correct"
+        '401':
+          description: Não autorizado
+
+  /api/admin/kids:
+    get:
+      summary: Listar links do Instagram (Kids)
+      tags: [Admin, Kids]
+      responses:
+        '200':
+          description: Lista de unidades e links
+          content:
+            application/json:
+              example:
+                - unit: "cabral"
+                  link: "https://instagram.com/..."
+                  updated_at: "2026-02-12T17:11:45Z"
+
+  /api/admin/kids/{unit}:
+    put:
+      summary: Atualizar link do Instagram de uma unidade
+      tags: [Admin, Kids]
+      parameters:
+        - name: unit
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [link]
+              properties:
+                link: { type: string }
+      responses:
+        '200':
+          description: Sucesso
+
+  /api/admin/delivery:
+    get:
+      summary: Listar links de Delivery
+      tags: [Admin, Delivery]
+      responses:
+        '200':
+          description: Lista de cidades e links
+          content:
+            application/json:
+              example:
+                - city: "curitiba"
+                  link: "https://ifood.com.br/..."
+                  updated_at: "2026-02-12T17:11:45Z"
+
+  /api/admin/delivery/{city}:
+    put:
+      summary: Atualizar link de Delivery de uma cidade
+      tags: [Admin, Delivery]
+      parameters:
+        - name: city
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [link]
+              properties:
+                link: { type: string }
+      responses:
+        '200':
+          description: Sucesso
+
+  /api/config:
+    get:
+      summary: Listar todas as configurações
+      tags: [Config]
+      responses:
+        '200':
+          description: Lista de chaves e valores
+          content:
+            application/json:
+              example:
+                - key: "kids_instagram_cabral"
+                  value: "https://instagram.com/..."
+                  updated_at: "2026-02-12T17:11:45Z"
+    post:
+      summary: Criar ou atualizar uma configuração
+      tags: [Config]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key:
+                  type: string
+                  description: Nome da configuração (ex:kids_instagram_batel)
+                value:
+                  type: string
+                  description: Valor a ser salvo
+      responses:
+        '200':
+          description: Sucesso
+          content:
+            application/json:
+              example: { success: true, key: "...", value: "..." }
+
+  /api/prompt:
+    get:
+      summary: Ler o prompt atual da IA
+      tags: [Prompt]
+      responses:
+        '200':
+          description: Conteúdo do prompt
+          content:
+            application/json:
+              example: { content: "# Identidade da IA..." }
+    post:
+      summary: Atualizar o prompt da IA
+      tags: [Prompt]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  description: Novo texto completo do prompt
+      responses:
+        '200':
+          description: Sucesso
+
+  /api/whatsapp/send:
+    post:
+      summary: Enviar mensagem de texto manual via WhatsApp
+      tags: [WhatsApp]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, text]
+              properties:
+                to:
+                  type: string
+                  description: Número do WhatsApp com DDI (ex: 5541999999999)
+                text:
+                  type: string
+                  description: Conteúdo da mensagem
+      responses:
+        '200':
+          description: Mensagem enviada
+        '400':
+          description: Dados inválidos
+
+  /health:
+    get:
+      summary: Check de saúde do servidor
+      security: []
+      tags: [System]
+      responses:
+        '200':
+          description: Status do sistema e conexões MCP
+          content:
+            application/json:
+              example:
+                status: "ok"
+                mcp: { cardapio: "connected", reservas: "connected" }
+
+  /webhook/whatsapp:
+    get:
+      summary: Verificação de Webhook (Meta/Facebook)
+      security: []
+      tags: [Webhooks]
+      parameters:
+        - name: hub.mode
+          in: query
+          required: true
+          schema: { type: string }
+        - name: hub.verify_token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: hub.challenge
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Challenge retornado
+    post:
+      summary: Receber eventos do WhatsApp
+      security: []
+      tags: [Webhooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200':
+          description: Evento recebido
