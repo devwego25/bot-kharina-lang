@@ -124,6 +124,21 @@ function nextWeekdayDate(targetWeekday: number, fromDate: Date = new Date()): Da
   return base;
 }
 
+function nextDayOfMonthDate(targetDay: number, fromDate: Date = new Date()): Date | null {
+  if (targetDay < 1 || targetDay > 31) return null;
+  const base = new Date(fromDate);
+  base.setHours(0, 0, 0, 0);
+  const year = base.getFullYear();
+  const month = base.getMonth();
+
+  const candidateCurrent = new Date(year, month, targetDay);
+  if (candidateCurrent.getMonth() === month && candidateCurrent >= base) return candidateCurrent;
+
+  const candidateNext = new Date(year, month + 1, targetDay);
+  if (candidateNext.getDate() === targetDay) return candidateNext;
+  return null;
+}
+
 function toBrDate(isoOrBr: string): string {
   const v = String(isoOrBr || '').trim();
   const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -190,18 +205,32 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     }
   }
 
+  if (!updates.date_text) {
+    const dayOnly = t.match(/\b(?:proximo|próximo)?\s*dia\s*(\d{1,2})\b/);
+    if (dayOnly) {
+      const day = parseInt(dayOnly[1], 10);
+      const date = nextDayOfMonthDate(day, today);
+      if (date) updates.date_text = toIsoDate(date);
+    }
+  }
+
   let hh: string | null = null;
   let mm = '00';
+  if (/\bmeio\s*dia\b/.test(t)) {
+    hh = '12';
+  } else if (/\bmeia\s*noite\b/.test(t)) {
+    hh = '00';
+  }
   const hm = t.match(/\b(\d{1,2})[:h](\d{2})\b/);
-  if (hm) {
+  if (!hh && hm) {
     hh = hm[1];
     mm = hm[2];
   } else {
     const hOnly = t.match(/\b(\d{1,2})\s*(h|hora|horas)\b/);
-    if (hOnly) hh = hOnly[1];
+    if (!hh && hOnly) hh = hOnly[1];
     else {
       const hWord = t.match(/\b(?:as|às)\s*(\d{1,2})\b/);
-      if (hWord && /(noite|tarde|manha|manhã)/.test(t)) hh = hWord[1];
+      if (!hh && hWord && /(noite|tarde|manha|manhã)/.test(t)) hh = hWord[1];
     }
   }
   if (hh !== null) {
@@ -1040,7 +1069,7 @@ async function handleDeterministicCommand(
   const isCancelIntent =
     /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva|nao vou poder ir|não vou poder ir)\b/.test(normalized);
   const isAlterIntent =
-    /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva)\b/.test(normalized);
+    /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva|trocar|troca|outro dia|nova data|tenho que alterar|preciso alterar|vamos alterar|quero trocar)\b/.test(normalized);
   const isReservationQueryIntent =
     /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
   const timeOnlyPattern =
