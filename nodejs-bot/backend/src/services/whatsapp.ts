@@ -339,6 +339,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
   const people = Number(r.people || 0);
   const kids = Number(r.kids ?? 0);
   const name = String(r.name || '').trim();
+  const notes = String(r.notes || r.occasion || '').trim();
 
   if (!storeId || !phone || !date || !time || !people) {
     return {
@@ -358,7 +359,8 @@ async function createReservationDeterministic(from: string, state: UserState): P
     date,
     time,
     numberOfPeople: people,
-    kids
+    kids,
+    ...(notes ? { notes } : {})
   };
 
   try {
