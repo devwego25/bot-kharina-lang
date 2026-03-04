@@ -1,0 +1,285 @@
+{
+  "updatedAt": "2025-11-11T14:59:52.194Z",
+  "createdAt": "2025-11-01T16:26:45.773Z",
+  "id": "o8lO3uIkIvwwaQYj",
+  "name": "Admin Kharina",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "0311f366-9d47-47f0-9802-e0fce06bec2a",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -384,
+        -32
+      ],
+      "id": "cde66cff-c9de-4b6d-82c4-2a7ca37667d8",
+      "name": "Webhook",
+      "webhookId": "0311f366-9d47-47f0-9802-e0fce06bec2a"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "73a96fd3-9f49-4000-9502-c2b341338654",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -608,
+        192
+      ],
+      "id": "69441f63-6de7-4ed3-b025-0432972f30bb",
+      "name": "Webhook1",
+      "webhookId": "73a96fd3-9f49-4000-9502-c2b341338654"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "=Attendent.{{ $('Webhook1').item.json.body.meta.sender.identifier }}-{{ $('Webhook1').item.json.body.contact_inbox.contact_id }}-{{ $('Webhook1').item.json.body.messages[0].conversation_id }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        48,
+        192
+      ],
+      "id": "839961c1-23b2-49a0-bc2f-aa64e819fc4a",
+      "name": "Redis1",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://chat.kharina.com.br/api/v1/accounts/{{ $json.body.accountId }}/conversations/{{ $json.body.conversationId }}/assignments",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api_access_token",
+              "value": "LoAh2ak7KNDANChBqd16miBp"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "team_id",
+              "value": "={{ $json.body.teamId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        -32
+      ],
+      "id": "e12fd620-b0a6-4af7-95f7-5dc3d218b24e",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f4d873f5-9e37-47c9-9d0a-222b680a4123",
+              "leftValue": "={{ $json.body.status }}",
+              "rightValue": "resolved",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -400,
+        192
+      ],
+      "id": "450b6f57-735a-4b07-869a-34b15389d15c",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $('Webhook').item.json.body.redisId }}",
+        "value": "true"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -32
+      ],
+      "id": "admin-set-lock-id",
+      "name": "SetLock",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 1200,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        264,
+        -32
+      ],
+      "id": "admin-wait-lock-id",
+      "name": "WaitLock"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ $(\"SetLock\").item.json.key }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        464,
+        -32
+      ],
+      "id": "admin-del-lock-id",
+      "name": "DelLock",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "SetLock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Redis1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SetLock": {
+      "main": [
+        [
+          {
+            "node": "WaitLock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WaitLock": {
+      "main": [
+        [
+          {
+            "node": "DelLock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "8bbe462d-e325-453f-8bb9-9c598cc26b71",
+  "activeVersionId": "8bbe462d-e325-453f-8bb9-9c598cc26b71",
+  "versionCounter": 23,
+  "triggerCount": 2,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2025-11-01T16:26:45.773Z",
+      "createdAt": "2025-11-01T16:26:45.773Z",
+      "role": "workflow:owner",
+      "workflowId": "o8lO3uIkIvwwaQYj",
+      "projectId": "OFYohD49gphPTkYf",
+      "project": {
+        "updatedAt": "2025-09-27T15:59:39.013Z",
+        "createdAt": "2025-09-27T15:28:39.377Z",
+        "id": "OFYohD49gphPTkYf",
+        "name": "Kharina  Restaurante <admin@kharina.com.br>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "a0aa474d-b7ee-446a-9a40-8e6d6ae99909"
+      }
+    }
+  ]
+}

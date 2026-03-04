@@ -1,0 +1,120 @@
+# Docker Swarm Stack for Kharina Bot
+# Deploy: docker stack deploy -c docker-compose.swarm.yml kharina-bot
+
+version: '3.8'
+
+services:
+  # Python LangChain Agent
+  langchain:
+    image: kharina-langchain:latest
+    build:
+      context: ./python-langchain
+      dockerfile: Dockerfile
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - REDIS_URL=redis://redis:6379
+      - MCP_CARDAPIO_URL=http://cardapio_app:3000/mcp
+      - MCP_CARDAPIO_TOKEN=${MCP_CARDAPIO_TOKEN}
+      - MCP_RESERVAS_URL=${MCP_RESERVAS_URL}
+      - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+    networks:
+      - kharina-network
+      - cardapio_default  # To reach cardapio_app
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Node.js Backend (refactored)
+  backend:
+    image: kharina-backend:latest
+    build:
+      context: ./nodejs-bot/backend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - WHATSAPP_TOKEN=${WHATSAPP_TOKEN}
+      - WHATSAPP_PHONE_ID=${WHATSAPP_PHONE_ID}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - LANGCHAIN_URL=http://langchain:8000
+      - CHATWOOT_URL=${CHATWOOT_URL}
+      - CHATWOOT_TOKEN=${CHATWOOT_TOKEN}
+      - CHATWOOT_ACCOUNT_ID=${CHATWOOT_ACCOUNT_ID}
+      - CHATWOOT_INBOX_ID=${CHATWOOT_INBOX_ID}
+      - MCP_CARDAPIO_URL=http://cardapio_app:3000/mcp
+      - MCP_CARDAPIO_TOKEN=${MCP_CARDAPIO_TOKEN}
+      - MCP_RESERVAS_URL=${MCP_RESERVAS_URL}
+      - MCP_RESERVAS_TOKEN=${MCP_RESERVAS_TOKEN}
+    networks:
+      - kharina-network
+      - cardapio_default
+      - traefik-public
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.kharina-bot.rule=Host(`chatbot.kharina.com.br`)"
+        - "traefik.http.routers.kharina-bot.entrypoints=websecure"
+        - "traefik.http.routers.kharina-bot.tls.certresolver=letsencrypt"
+        - "traefik.http.services.kharina-bot.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis (shared)
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - kharina-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  kharina-network:
+    driver: overlay
+    attachable: true
+  cardapio_default:
+    external: true
+  traefik-public:
+    external: true
+
+volumes:
+  redis-data:

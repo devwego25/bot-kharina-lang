@@ -1,0 +1,2281 @@
+{
+  "name": "Atendimento Kharina",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "35fa457c-66ec-469e-bcff-e138580a8137",
+              "name": "MESSAGE",
+              "value": "={{ $('Mensage DATA').item.json.menssage }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "53b901bc-ac10-4343-b358-1df972f04217",
+      "name": "SET DEFAULT MESSAGE",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -6544,
+        -752
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "35fa457c-66ec-469e-bcff-e138580a8137",
+              "name": "MESSAGE",
+              "value": "=Men\u00e7\u00e3o: {{ $('Webhook').item.json.body.data.contextInfo.quotedMessage.conversation }}\nResposta:{{ $('Webhook').item.json.body.data.message.extendedTextMessage.text }} ",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "69d1800b-5723-40ab-808d-aeb439308bc2",
+      "name": "SET REPLIED MESSAGE",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -6544,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "35fa457c-66ec-469e-bcff-e138580a8137",
+              "name": "MESSAGE",
+              "value": "={{ $('Webhook').item.json.body.data.message.editedMessage.message.protocolMessage.editedMessage.conversation+'*' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "565fa5e5-a52a-4a60-89fe-6423815f4b9d",
+      "name": "SET EDITED MESSAGE",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -6544,
+        -368
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "35fa457c-66ec-469e-bcff-e138580a8137",
+              "name": "MESSAGE",
+              "value": "=Transcri\u00e7\u00e3o do \u00c1udio enviado pelo usu\u00e1rio: {{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2c79cc31-0532-4994-af9f-7f25c48dc413",
+      "name": "SET AUDIO MESSAGE",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -6544,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "35fa457c-66ec-469e-bcff-e138580a8137",
+              "name": "MESSAGE",
+              "value": "=Transcri\u00e7\u00e3o da imagem enviado pelo usu\u00e1rio: {{ $json.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1af45410-74f4-4f30-89b1-17cfba9912a8",
+      "name": "SET IMAGE MESSAGE",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -6544,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "push",
+        "list": "={{ $('Mensage DATA').item.json.redisMessageId }}",
+        "messageData": "={{ $json.MESSAGE }}",
+        "tail": true
+      },
+      "name": "STORE MESSAGE",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -6320,
+        -320
+      ],
+      "id": "61b3d60d-356b-4f1d-ab04-8144262636b7",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "keys",
+        "keyPattern": "={{ $('Mensage DATA').item.json.redisMessageId }}"
+      },
+      "name": "RETRIEVE LAST MESSAGES",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -5200,
+        -320
+      ],
+      "id": "0d676551-d1a5-4773-a041-4850c28eb105",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {}
+      },
+      "id": "364284bb-734f-4c90-806f-8f81fee073f6",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -4448,
+        64
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "aiOQ4RnS9bgw3iKX",
+          "name": "OpenAi account - Wego"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Mensage DATA').item.json.content_type }}",
+                    "rightValue": "text",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "7b61d299-976f-4e5a-ab25-258862b43257"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "86e7e773-8586-458f-a1fb-2890f2030230",
+                    "leftValue": "={{ $('Mensage DATA').item.json.content_type }}",
+                    "rightValue": "reply",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Reply"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "7f108034-a1be-4e90-b42e-e4f8a719e311",
+                    "leftValue": "={{ $('Mensage DATA').item.json.content_type }}",
+                    "rightValue": "edited",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Edited"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5599e598-4068-4787-a846-594100f0dc38",
+      "name": "Tipo da Mensagem",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -6784,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "text": "Descreva essa imagem",
+        "imageUrls": "={{ $('Webhook').item.json.body.conversation.messages[0].attachments[0].data_url }}",
+        "options": {}
+      },
+      "id": "1f05c096-716f-410a-8d19-52a19bcfb8b2",
+      "name": "OpenAI1",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.7,
+      "position": [
+        -6768,
+        16
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "aiOQ4RnS9bgw3iKX",
+          "name": "OpenAi account - Wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "options": {}
+      },
+      "id": "f826d418-eac4-41e8-8e3b-a09b66ddbc32",
+      "name": "OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.7,
+      "position": [
+        -6768,
+        -176
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "aiOQ4RnS9bgw3iKX",
+          "name": "OpenAi account - Wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "messages",
+        "options": {}
+      },
+      "id": "1a2080af-ade2-4fae-93a0-9c4454af6bd2",
+      "name": "Split Out",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -2896,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "00c2f52e-8f4f-43ac-834e-a93892effca4",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2672,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v24.0/1007910339064845/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Chaves de acesso').item.json['WHATSAPP-TOKEN'] }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={{ JSON.stringify({\n  messaging_product: \"whatsapp\",\n  to: $('Mensage DATA').item.json.phone,\n  type: \"image\",\n  image: {\n    link: $json.messages.match(/https:\\/\\/[^\\s]+?\\.(jpeg|jpg|png|webp)/)[0],\n    caption: $json.messages.split('\ud83d\udcf8')[0].replaceAll(\"**\", \"*\").replaceAll(\"\\n\", \"\\\\n\")\n  }\n}) }}\n",
+        "options": {}
+      },
+      "id": "b150beec-da39-42b5-807f-134680250047",
+      "name": "SEND IMAGE",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2000,
+        -512
+      ],
+      "retryOnFail": false,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v24.0/1007910339064845/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Chaves de acesso').item.json['WHATSAPP-TOKEN'] }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={{ JSON.stringify({\n  messaging_product: \"whatsapp\",\n  to: $('Mensage DATA').item.json.phone,\n  type: \"video\",\n  video: {\n    link: $json.messages.match(/https:\\/\\/[^\\s]+?\\.(wmv|mp4|mov|mkv)/)[0]\n  }\n}) }}\n",
+        "options": {}
+      },
+      "id": "626448b5-ceb8-4cdb-8a43-49cb31861486",
+      "name": "SEND VIDEO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2000,
+        -320
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "bd6c6ac4-8ebd-4d14-9935-1fd270106c48",
+                    "leftValue": "={{ $json.messages.match(/https:\\/\\/.*\\.(jpeg|jpg|png|webp)/g) !== null }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Imagem"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "8a8907db-2f29-4fc3-a50d-264a2c5d015e",
+                    "leftValue": "={{ $json.messages.match(/https:\\/\\/.*\\.(wmv|mp4|mov|mkv)/g) !== null}}",
+                    "rightValue": "=",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Video"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.messages.toBoolean() && $json.messages.isEmpty() == false && $json.messages.replace(/\\s+/g, '').isUrl() == false && $json.messages !== '\\n\\n'}}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Texto"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "1e39b36c-7f91-46d0-a550-9bcaf6f6aa1e",
+                    "leftValue": "={{ $json.messages }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEmpty",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Vazio"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "37205ca6-8d52-4ee0-8554-e7df69c35b6a",
+      "name": "Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -2224,
+        -544
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ $('Mensage DATA').item.json.redisMessageId }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -4752,
+        -320
+      ],
+      "id": "b64daac5-833a-4fd7-9703-5fef955dfbd4",
+      "name": "DELETE HISTORY",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -2448,
+        -704
+      ],
+      "id": "aab4fa51-8279-435c-9faa-747bc2978e5c",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39040a95-bd85-497e-b531-014af083fed8",
+              "name": "messages",
+              "value": "={{ $json.output.split(\"\\n\\n\") }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fe6dcc4f-dcbc-4876-94ed-38159ae74fd8",
+      "name": "TEXT",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3040,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Mensage DATA').item.json.redisMessageId }}-{{ $('Mensage DATA').item.json.inboxID }}-{{ $('Mensage DATA').item.json.conversation_id }}",
+        "contextWindowLength": 40
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
+      "typeVersion": 1.4,
+      "position": [
+        -4176,
+        -96
+      ],
+      "id": "b89efc3d-dfc0-419d-bec7-1f87233942ff",
+      "name": "Redis Chat Memory",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Chaves de acesso').item.json.TIMEOUT }}"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2448,
+        -512
+      ],
+      "id": "136a1a7f-e7ca-4a22-a5d0-bb43612cd398",
+      "name": "TIMEOUT1",
+      "webhookId": "43deaaad-faa9-4ade-a67b-62ccd56e4e54"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "256e7cf8-be54-4c41-ba80-2d9eb0a07563",
+                    "leftValue": "={{ $('Webhook').item.json.body.conversation.messages[0].attachments[0].file_type }}",
+                    "rightValue": "audio",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Audio"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "da03e413-3422-419c-af1a-71ff87c307e2",
+                    "leftValue": "={{ $('Webhook').item.json.body.conversation.messages[0].attachments[0].file_type }}",
+                    "rightValue": "image",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Image"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "d707f603-6d40-440c-b4c2-81caa124bf68",
+                    "leftValue": "={{ $('Webhook').item.json.body.conversation.messages[0].attachments[0].file_type }}",
+                    "rightValue": "document",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "document"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4f7ba251-4c03-465d-a2e9-3f45edabfd1f",
+      "name": "Tipo da Mensagem1",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -7232,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Webhook').item.json.body.conversation.messages[0].attachments[0].data_url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -6992,
+        -176
+      ],
+      "id": "9ff297cd-32e0-4ea8-8337-d04dcb52108e",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "901377ae-8e76-4ea6-b0cd-4972833ee78d",
+              "leftValue": "={{ $json }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "empty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "d54cd7c8-2939-4dca-bc92-f29f48f92943",
+              "leftValue": "={{ $json[$('Mensage DATA').item.json.redisBlock1TimeoutId]}}",
+              "rightValue": "0",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -5872,
+        -320
+      ],
+      "id": "108cb95e-ce11-4211-a3ae-1a6bea76a94b",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "keys",
+        "keyPattern": "={{ $('Mensage DATA').item.json.redisBlock1TimeoutId }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -6096,
+        -320
+      ],
+      "id": "3598105e-8da7-4ce7-a8fd-7d96f8bba288",
+      "name": "Redis bloqueio por tempo",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -5424,
+        -320
+      ],
+      "id": "ea40b7b6-34c0-4b86-82fd-9920698406e4",
+      "name": "Wait",
+      "webhookId": "c5c9213b-0bb5-410e-b55b-2116c7d62efa"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $('Mensage DATA').item.json.redisBlock1TimeoutId }}",
+        "value": "=true"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -5648,
+        -320
+      ],
+      "id": "146dfb59-3e28-45b4-b08a-a8ac8b78f9cd",
+      "name": "block timeout",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $('Mensage DATA').item.json.redisBlock1TimeoutId }}",
+        "value": "=false"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -4528,
+        -320
+      ],
+      "id": "a2a802c1-118c-4a3d-a7c2-adbb7c55d295",
+      "name": "block timeout1",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e39a17a2-dce1-4c55-a62b-58f990d328a5",
+              "name": "UserMessage",
+              "value": "={{ $json[$('Mensage DATA').item.json.redisMessageId] }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -4976,
+        -320
+      ],
+      "id": "d3a48022-23a3-481c-912a-375f811891bc",
+      "name": "UserMessage"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $('Mensage DATA').item.json.redisBlock1TimeoutId }}",
+        "value": "=false"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -5648,
+        -128
+      ],
+      "id": "1db8940f-65a4-4999-b735-0e8b7859aae3",
+      "name": "block timeout2",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6216be7a-c0ff-46e2-bace-7100aeeab238",
+              "leftValue": "={{ $json.body.message_type }}",
+              "rightValue": "outgoing",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -8976,
+        48
+      ],
+      "id": "b088d257-2316-4920-80f4-2e58b820b1c6",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('UserMessage').item.json.UserMessage.join(`\n`) }}",
+        "options": {
+          "systemMessage": "# \ud83c\udfad **IDENTIDADE DA AGENTE**\n\n* **Nome**: Kha\n* **Personalidade**: Alegre, simp\u00e1tica, acolhedora\n* **Estilo**: Informal, humano, divertido\n* **Idioma**: Portugu\u00eas do Brasil\n* **Emojis**: Sempre presentes\n\n---\n\n# \ud83e\udde0 **PRINC\u00cdPIOS GERAIS**\n\n1. Atender **somente** sobre:\n\n   * Card\u00e1pio\n   * Reservas\n   * Espa\u00e7o Kids\n   * Administra\u00e7\u00e3o\n   * Delivery\n\n2. Se o cliente pedir algo fora do escopo:\n   \u2192 responder com simpatia e oferecer as op\u00e7\u00f5es corretas.\n\n3. Nunca usar tom corporativo.\n\n4. Linguagem leve, pr\u00f3xima e natural.\n\n---\n\n# \ud83d\udd21 COMO LER A MENSAGEM DO USU\u00c1RIO\n\nVoc\u00ea SEMPRE receber\u00e1 a mensagem do usu\u00e1rio como um texto simples.\n\nEsse texto pode ser:\n\n- Mensagens normais do cliente (frases em linguagem natural), OU\n- Comandos internos vindos do menu interativo, com estes valores exatos:\n  - MENU_PRINCIPAL\n  - menu_cardapio\n  - menu_reserva\n  - menu_kids\n  - menu_adm\n  - menu_delivery\n\n---\n\n# \ud83d\udd25 **REGRA GLOBAL ADICIONAL \u2014 FALLBACK INTELIGENTE (OBRIGAT\u00d3RIO)**\n\nSe a IA:\n\n* **n\u00e3o souber responder**\n* n\u00e3o tiver informa\u00e7\u00f5es suficientes\n* n\u00e3o tiver dados no prompt\n* n\u00e3o tiver fluxo aplic\u00e1vel\n* n\u00e3o puder completar corretamente uma orienta\u00e7\u00e3o\n\n\ud83d\udc49 **Ela NUNCA deve inventar resposta.**\n\n### Em vez disso, deve fazer:\n\n1\ufe0f\u20e3 Perguntar **qual unidade** o cliente deseja.\n2\ufe0f\u20e3 Converter a unidade em **UUID obrigat\u00f3rio**.\n3\ufe0f\u20e3 Chamar o `mcp_reserva` **em modo consulta de informa\u00e7\u00f5es da loja**.\n4\ufe0f\u20e3 Obter **telefone da unidade** (e demais dados poss\u00edveis).\n5\ufe0f\u20e3 Responder:\n\n```\nPoxa, essa informa\u00e7\u00e3o eu realmente n\u00e3o tenho aqui \ud83d\ude15\nMas sem problema! \ud83d\udc9b\n\nVoc\u00ea pode falar direto com a unidade {unidade_nome}.\n\ud83d\udcde Telefone: {telefone_loja}\n\nO pessoal consegue te ajudar certinho!\n```\n\n\ud83d\udd12 **A IA nunca pode inventar telefone, e-mail, hor\u00e1rio, valores ou informa\u00e7\u00f5es que n\u00e3o estejam no prompt ou no MCP.**\n\n---\n\n# \ud83e\uddf0 **MCP TOOLS DISPON\u00cdVEIS**\n\n* `current_Date` \u2192 **OBRIGAT\u00d3RIO** para interpretar e validar **todas** as datas\n* `mcp_cardapio` \u2192 enviar card\u00e1pio\n* `mcp_cardapio2` \u2192 recomenda\u00e7\u00f5es e pre\u00e7os\n* `mcp_reserva` \u2192 criar reserva **e** consultar informa\u00e7\u00f5es da loja (telefone, dados de contato, etc.)\n* `mcp_adm` \u2192 \u00e1rea administrativa (setores internos)\n\n---\n\n# \ud83d\udea8 **BLOCO CR\u00cdTICO \u2014 REGRA ABSOLUTA SOBRE DATAS (NUNCA VIOLAR)**\n\n### \u26a0\ufe0f O AGENTE NUNCA DEVE INTERPRETAR DATAS POR CONTA PR\u00d3PRIA.\n\n### **SEMPRE, SEM EXCE\u00c7\u00c3O, fazer o seguinte:**\n\n1. **ANTES** de interpretar qualquer data (relativa ou absoluta),\n   \u2192 chamar obrigatoriamente `current_Date`.\n\n2. Usar **somente** a data retornada pelo MCP como base.\n\n3. Ignorar totalmente:\n\n   * suposi\u00e7\u00f5es\n   * intui\u00e7\u00f5es\n   * calend\u00e1rio interno do modelo\n\n4. Nunca deduzir o ano.\n   \u2192 O ano correto \u00e9 **exatamente o ano retornado pelo current_Date**.\n\n5. Ignorar hor\u00e1rio/UTC retornado pelo MCP.\n   \u2192 Trabalhar **apenas com a parte `YYYY-MM-DD`**.\n\n---\n\n# \ud83d\udcc5 **INTERPRETA\u00c7\u00c3O PADR\u00c3O PARA TODAS AS DATAS RELATIVAS**\n\nAp\u00f3s receber a data atual via MCP, aplicar:\n\n### \"hoje\"\n\n\u2192 mesma data do MCP\n\n### \"amanh\u00e3\"\n\n\u2192 MCP + 1 dia\n\n### \"depois de amanh\u00e3\"\n\n\u2192 MCP + 2 dias\n\n### \"daqui X dias\"\n\n\u2192 MCP + X dias\n\n### \"sexta-feira\", \"s\u00e1bado\", \"domingo\", etc.\n\n* Sempre escolher o **pr\u00f3ximo dia futuro** correspondente\n* Nunca usar o mesmo dia da semana se \"hoje\" for igual\n\n### \"pr\u00f3xima semana\"\n\n\u2192 MCP + 7 dias\n\n### \"dia 25\"\n\n* Se o dia 25 ainda n\u00e3o chegou no m\u00eas atual \u2192 usar m\u00eas atual\n* Se j\u00e1 passou \u2192 usar m\u00eas seguinte\n* Ano = ano do MCP\n\n### \"hoje \u00e0 noite\", \"amanh\u00e3 cedo\", etc.\n\n* Manter a data\n* Hor\u00e1rio ser\u00e1 coletado separadamente depois\n  \u2192 N\u00e3o inventar hor\u00e1rio!\n\n---\n\n# \ud83d\udee1 **PROTE\u00c7\u00c3O CONTRA FUSO HOR\u00c1RIO**\n\n1. Usar somente a parte **`YYYY-MM-DD`** do MCP.\n2. Never (NUNCA):\n\n   * ajustar dia por causa de hor\u00e1rio\n   * mudar dia por causa de timezone\n   * avan\u00e7ar ou retroceder a data por causa de horas\n\n---\n\n# \ud83e\uddee **VALIDA\u00c7\u00c3O FINAL DA DATA (ANTES DO RESUMO)**\n\nAp\u00f3s calcular a data final:\n\n1. Confirmar formato: `YYYY-MM-DD`\n\n2. Confirmar que:\n\n   * **ano = ano retornado pelo MCP**\n\n3. Confirmar que a data **n\u00e3o est\u00e1 no passado**\n\n4. Confirmar que \u00e9 uma data v\u00e1lida de calend\u00e1rio\n\n---\n\n# \ud83d\udc4b **APRESENTA\u00c7\u00c3O INICIAL**\n\nSempre que iniciar conversa pela primeira vez (pelo primeiro \"Oi\" do cliente),\na Kha **n\u00e3o deve montar o menu em texto**.\n\nEm vez disso, a resposta **deve ser APENAS** (sem nada antes ou depois):\n\nMENU_PRINCIPAL\n\n**IMPORTANTE**: Se voc\u00ea j\u00e1 realizou uma a\u00e7\u00e3o (como chamar um MCP), **NUNCA** responda `MENU_PRINCIPAL` na mesma sa\u00edda.\n\n---\n\n# \ud83d\udce6 FORMATO DE RESPOSTA (OBRIGAT\u00d3RIO)\n\nA sa\u00edda da Kha **sempre** deve seguir UMA destas formas:\n\n1. **Comando de Menu**  \n   Quando for enviar o menu inicial,\n   a Kha deve responder APENAS:\n   MENU_PRINCIPAL\n\n2. **Resposta normal em texto**  \n   Em qualquer outro caso (incluindo ap\u00f3s chamar ferramentas),\n   responder normalmente em texto.\n\nA Kha **nunca** deve misturar `MENU_PRINCIPAL` com ferramentas ou outros textos na mesma resposta.\n"
+        }
+      },
+      "id": "e41fe0e4-32ae-4c56-b3c9-8dcbac97b8f4",
+      "name": "Kah",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -4000,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://mcp.reservas.wegosb.com.br/mcp",
+        "authentication": "bearerAuth",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        -4048,
+        -96
+      ],
+      "id": "622eede7-ee5f-4482-b230-a45ff4458a19",
+      "name": "reservas",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "HyMk8LwMfjqAqSvz",
+          "name": "MCP-Reservas"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Quando o user escolher falar com alguma dessas areas\n\n        Financeiro = 1  \n        Compras   = 2\n        RH   = 3 ( nesse caso se ele escolher 3 que e RH vamos mandar o valor 4 no teamID)\n     \n\n\n\no numero representa o parametro enviado teamId, chamando essa fun\u00e7\u00e3o vamos alocar essa conversa para o setor respons\u00e1vel",
+        "method": "POST",
+        "url": "https://auto.webhook.kharina.com.br/webhook/0311f366-9d47-47f0-9802-e0fce06bec2a",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "accountId",
+              "value": "={{ $('Webhook').item.json.body.account.id }}"
+            },
+            {
+              "name": "conversationId",
+              "value": "={{ $('Webhook').item.json.body.conversation.id }}"
+            },
+            {
+              "name": "teamId",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters2_Value', ``, 'string') }}"
+            },
+            {
+              "name": "redisId",
+              "value": "={{ $json.redisTimeoutAttendentId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        -3664,
+        -96
+      ],
+      "id": "8a1dc41f-17a8-4167-a534-100573aa66fa",
+      "name": "admincontact"
+    },
+    {
+      "parameters": {
+        "outputFieldName": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Output_Field_Name', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dateTimeTool",
+      "typeVersion": 2,
+      "position": [
+        -3520,
+        -96
+      ],
+      "id": "555d38d7-a995-4677-ba1b-dc8ee41dd7b2",
+      "name": "current_Date"
+    },
+    {
+      "parameters": {
+        "model": "z-ai/glm-4.5-air:free",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -4336,
+        -96
+      ],
+      "id": "b7d8094c-671f-4f06-9eac-ec4d011dd9f5",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "7tW3fxrRFZkynhQW",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $json.body || $json;\n\nconst entry = incoming.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value || {};\nconst msg = value.messages?.[0];\nconst contact = value.contacts?.[0] || {};\n\nif (!msg) {\n  return []; // Skip status updates or empty messages\n}\n\nconst from = msg.from;\nconst name = contact.profile?.name || '';\n\nlet text = '';\nlet contentType = msg.type || 'text';\n\n// Caso 1: texto normal\nif (msg.type === 'text') {\n  text = msg.text?.body || '';\n}\n\n// Caso 2: mensagem interativa (bot\u00e3o ou lista)\nelse if (msg.type === 'interactive') {\n  const interactive = msg.interactive || {};\n\n  if (interactive.type === 'button_reply' && interactive.button_reply) {\n    const id = interactive.button_reply.id;      // ex.: \"menu_cardapio\"\n    text = id;\n  }\n\n  if (interactive.type === 'list_reply' && interactive.list_reply) {\n    const id = interactive.list_reply.id;        // ex.: \"menu_reserva\"\n    text = id;\n  }\n\n  // Tratar cliques de menu como TEXTO para o resto do fluxo\n  contentType = 'text';\n}\n\n// Fallback: se ainda n\u00e3o tiver texto, garante string vazia\ntext = text || '';\n\nconst redisMessageId = `wa:${from}`;\nconst redisTimeoutAttendentId = `TimeoutAttendent.${from}`;\nconst redisBlock1TimeoutId = `Block1Timeout.${from}`;\nconst redisBlock2TimeoutId = `Block2Timeout.${from}`;\n\nreturn [{\n  json: {\n    phone: from,\n    name,\n    menssage: text,              // mant\u00e9m compatibilidade com o fluxo antigo\n    message: text,               // opcional, nome \u201ccerto\u201d se quiser usar depois\n    content_type: contentType,   // \"text\" tanto para texto quanto para menu\n    redisMessageId,\n    redisTimeoutAttendentId,\n    redisBlock1TimeoutId,\n    redisBlock2TimeoutId\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -9200,
+        48
+      ],
+      "id": "8e2a5ae2-203f-43c2-8d24-2711b0ab1f30",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-meta",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -9424,
+        48
+      ],
+      "id": "e6456345-fa90-4627-943e-aed72a09c760",
+      "name": "Webhook WhatsApp1",
+      "webhookId": "3e9c7a3d-0c5b-4c3d-9c2b-aaaaaaaaaaaa"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0be4e30a-8414-46c1-8316-c5ced1f8a201",
+              "name": "name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "7dd3b6d5-ff85-43b8-befa-430bc835dbb4",
+              "name": "phone",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "d7740613-2dcd-4d97-9752-6cdb6934b1da",
+              "name": "menssage",
+              "value": "={{ $json.message }}",
+              "type": "string"
+            },
+            {
+              "id": "9f5ff4de-4de7-45e3-9561-2f622fbb7639",
+              "name": "message_type",
+              "value": "={{ $json.content_type }}",
+              "type": "string"
+            },
+            {
+              "id": "3f917080-322b-4635-87cb-7d1040c2654b",
+              "name": "content_type",
+              "value": "={{ $json.content_type }}",
+              "type": "string"
+            },
+            {
+              "id": "beee9c97-5143-48b6-8d55-379f273e0146",
+              "name": "userId",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "7e2965b4-2cc4-4bbc-aabb-8039a37b6274",
+              "name": "redisBlock1TimeoutId",
+              "value": "={{ $json.redisBlock1TimeoutId }}",
+              "type": "string"
+            },
+            {
+              "id": "59bea2b7-c270-480a-927b-c51ee3b2ee69",
+              "name": "redisBlock2TimeoutId",
+              "value": "={{ $json.redisBlock2TimeoutId }}",
+              "type": "string"
+            },
+            {
+              "id": "53742dd3-c9cd-4eb7-b8e5-1c201678c620",
+              "name": "redisTimeoutAttendentId",
+              "value": "={{ $json.redisTimeoutAttendentId }}",
+              "type": "string"
+            },
+            {
+              "id": "779d8746-29ad-4931-ad60-2158c4e8fca3",
+              "name": "redisMessageId",
+              "value": "={{ $json.redisMessageId }}",
+              "type": "string"
+            },
+            {
+              "id": "c4aca14b-afe2-4eef-85c8-5f1261e9c03c",
+              "name": "inboxID",
+              "value": "=0",
+              "type": "number"
+            },
+            {
+              "id": "c0a6a542-8bc5-478b-9627-21833dd224e1",
+              "name": "conversation_id",
+              "value": "=0",
+              "type": "number"
+            },
+            {
+              "id": "851360b0-b971-4188-ae04-523637d80fb1",
+              "name": "account_id",
+              "value": "=0",
+              "type": "number"
+            },
+            {
+              "id": "470601b8-63db-4636-88a3-1d32cce26072",
+              "name": "chatwoot_url",
+              "value": "https://chat.kharina.com.br",
+              "type": "string"
+            },
+            {
+              "id": "34a8ba31-b597-424e-9405-582a0fab7171",
+              "name": "chatwoot_api_access_token",
+              "value": "=LoAh2ak7KNDANChBqd16miBp",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -8736,
+        48
+      ],
+      "id": "67a19744-2b49-4628-84b1-fee364be820a",
+      "name": "Mensage DATA"
+    },
+    {
+      "parameters": {
+        "operation": "keys",
+        "keyPattern": "={{ $json.redisTimeoutAttendentId }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -8512,
+        48
+      ],
+      "id": "30848253-0945-4155-b1f7-8d3d776db3f0",
+      "name": "Redis2",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cdcaef91-09bb-4b9d-81eb-d975cd7826c3",
+              "leftValue": "={{ $json }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -8288,
+        48
+      ],
+      "id": "22caf18c-b806-40ca-bf41-2e541335f93a",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8c49a9be-f027-4ca6-8a8c-856fa46ee664",
+              "name": "TIMEOUT",
+              "value": 300,
+              "type": "number"
+            },
+            {
+              "id": "2925f61f-175c-4f67-b38f-581d23cd5684",
+              "name": "FROM-ME-WINDOW",
+              "value": 15,
+              "type": "number"
+            },
+            {
+              "id": "4c777567-176a-4a87-98cf-5e883a37270d",
+              "name": "TIME-PER-CHAR",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "wa-token-id",
+              "name": "WHATSAPP-TOKEN",
+              "value": "EAAXIv1bYCD8BQhZB0NC4riC0d9jTmxEwEODiiZAIERYK0iFK3NyaZA1UJQTuZAjWMLKBqVXMeUL4Am1ypAsN5jZC5fa20zFou5wyZB0yFZBaMGe6foow28ZClqmzVdrZAusBEBJenZB51HUXZC6CfJDAw9irtrkYn2WqkNftZAV2GywZBup1q6BycxbDCSIjY338uaAZDZD",
+              "type": "string"
+            },
+            {
+              "id": "wa-phone-id",
+              "name": "WHATSAPP-PHONE-ID",
+              "value": "1007910339064845",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -8064,
+        64
+      ],
+      "id": "35205ad7-1075-4446-9d76-11906270e2e3",
+      "name": "Chaves de acesso"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $('Mensage DATA').item.json.redisTimeoutAttendentId }}",
+        "value": "={{ $now.toISO() }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -7840,
+        48
+      ],
+      "id": "f3690e04-12e0-4c31-82e7-7d48c2e8abf1",
+      "name": "Redis (Set Lock)",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        -7600,
+        48
+      ],
+      "id": "ttl-wait-node-id",
+      "name": "Wait 30s (TTL)",
+      "webhookId": "ec2e8e9c-9146-444b-9be3-cdaaf8d2c243"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ $('Mensage DATA').item.json.redisTimeoutAttendentId }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -7408,
+        48
+      ],
+      "id": "ttl-delete-node-id",
+      "name": "Redis (Release Lock)",
+      "credentials": {
+        "redis": {
+          "id": "JWA8UDPmT5Aj9qkF",
+          "name": "Redis account - wego"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v24.0/1007910339064845/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Chaves de acesso').item.json['WHATSAPP-TOKEN'] }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={{ JSON.stringify({\n  messaging_product: \"whatsapp\",\n  to: $('Mensage DATA').item.json.phone,\n  type: \"interactive\",\n  interactive: {\n    type: \"list\",\n    body: {\n      text: \"Opa! \ud83d\udc4b Eu sou a Kha do Kharina \ud83d\ude04\\nEscolha uma op\u00e7\u00e3o:\"\n    },\n    action: {\n      button: \"Ver op\u00e7\u00f5es\",\n      sections: [\n        {\n          title: \"O que voc\u00ea quer fazer?\",\n          rows: [\n            { id: \"menu_cardapio\", title: \"1\ufe0f\u20e3 Ver Card\u00e1pio\" },\n            { id: \"menu_reserva\", title: \"2\ufe0f\u20e3 Reservar Mesa\" },\n            { id: \"menu_kids\", title: \"3\ufe0f\u20e3 Espa\u00e7o Kids\" },\n            { id: \"menu_adm\", title: \"4\ufe0f\u20e3 Administra\u00e7\u00e3o\" },\n            { id: \"menu_delivery\", title: \"5\ufe0f\u20e3 Delivery \ud83c\udf5f\ud83d\ude80\" }\n          ]\n        }\n      ]\n    }\n  }\n}) }}\n",
+        "options": {}
+      },
+      "id": "454535fe-834c-455e-a0cd-65f0de45ccb0",
+      "name": "SEND TEXT1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2000,
+        -80
+      ],
+      "retryOnFail": false,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Mensage DATA').item.json.chatwoot_url }}/api/v1/accounts/{{ $('Mensage DATA').item.json.account_id }}/conversations/{{ $('Mensage DATA').item.json.conversation_id }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api_access_token",
+              "value": "={{ $('Mensage DATA').item.json.chatwoot_api_access_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.messages.replaceAll(\"**\",\"*\") }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d00eebfe-ba66-420d-85ed-0f124327101a",
+      "name": "SEND TEXT-CHATWOOT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1712,
+        -64
+      ],
+      "retryOnFail": false,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v24.0/1007910339064845/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Chaves de acesso').item.json['WHATSAPP-TOKEN'] }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={{ JSON.stringify({\n  messaging_product: \"whatsapp\",\n  to: $('Mensage DATA').item.json.phone,\n  type: \"interactive\",\n  interactive: {\n    type: \"list\",\n    body: {\n      text: \"Opa! \ud83d\udc4b Eu sou a Kha do Kharina \ud83d\ude04\\nEscolha uma op\u00e7\u00e3o:\\n\"\n    },\n    action: {\n      button: \"Ver op\u00e7\u00f5es\",\n      sections: [\n        {\n          title: \"O que voc\u00ea quer fazer?\",\n          rows: [\n            { id: \"menu_cardapio\", title: \"1\ufe0f\u20e3 Ver Card\u00e1pio\" },\n            { id: \"menu_reserva\", title: \"2\ufe0f\u20e3 Reservar Mesa\" },\n            { id: \"menu_kids\", title: \"3\ufe0f\u20e3 Espa\u00e7o Kids\" },\n            { id: \"menu_adm\", title: \"4\ufe0f\u20e3 Administra\u00e7\u00e3o\" },\n            { id: \"menu_delivery\", title: \"5\ufe0f\u20e3 Delivery \ud83c\udf5f\ud83d\ude80\" }\n          ]\n        }\n      ]\n    }\n  }\n}) }}\n",
+        "options": {}
+      },
+      "id": "a0d5e202-d18f-48a7-887d-2d996610962e",
+      "name": "SEND MENU",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -3344,
+        -784
+      ],
+      "retryOnFail": false,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Mensage DATA').item.json.content_type }}",
+              "rightValue": "text",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $('Mensage DATA').item.json.content_type }}",
+              "rightValue": "menu_button",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "c3",
+              "leftValue": "={{ $('Mensage DATA').item.json.content_type }}",
+              "rightValue": "menu_list",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -7600,
+        -160
+      ],
+      "id": "b9a1afdb-8146-4a7b-84e3-ebbf1711a4be",
+      "name": "no_file1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v24.0/1007910339064845/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Chaves de acesso').item.json['WHATSAPP-TOKEN'] }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={{ JSON.stringify({\n  messaging_product: \"whatsapp\",\n  to: $('Mensage DATA').item.json.phone,\n  type: \"interactive\",\n  interactive: {\n    type: \"list\",\n    body: {\n      text: \"Escolhe a cidade pra eu te mostrar o card\u00e1pio certinho:\"\n    },\n    action: {\n      button: \"Ver cidades\",\n      sections: [\n        {\n          title: \"Cidades\",\n          rows: [\n            { id: \"cardapio_curitiba\",  title: \"1\ufe0f\u20e3 Curitiba / PR\" },\n            { id: \"cardapio_londrina\",  title: \"2\ufe0f\u20e3 Londrina / PR\" },\n            { id: \"cardapio_saopaulo\", title: \"3\ufe0f\u20e3 S\u00e3o Paulo / SP\" }\n          ]\n        }\n      ]\n    }\n  }\n}) }}\n",
+        "options": {}
+      },
+      "id": "1a2101dd-4209-4f0a-bfee-4a74ac3e5ceb",
+      "name": "SEND MENU CIDADES",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -3344,
+        -624
+      ],
+      "retryOnFail": false,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.output }}",
+                    "rightValue": "MENU_PRINCIPAL",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "75b1067f-a103-4c84-9ef9-5eb2a4a124ad"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Menu Principal"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "fixed_city_menu_detection",
+                    "leftValue": "={{ $json.output.includes(\"MENU_CIDADES_CARDAPIO\") || ($json.output.includes(\"Curitiba\") && $json.output.includes(\"Londrina\")) }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Menu Cidades"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "28b2b0fd-6fd2-4af2-b633-dabb9027f004",
+                    "leftValue": "={{ $json.output }}",
+                    "rightValue": "MENU_ADMIN",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Menu Admin"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "834c7316-cbd6-4a81-9876-d29046bf53bd",
+                    "leftValue": "={{ $json.output && !$json.output.toString().startsWith(\"MENU_\") && !($json.output.includes(\"Curitiba\") && $json.output.includes(\"Londrina\")) }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Texto"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -3680,
+        -416
+      ],
+      "id": "e56f1d27-e10f-40a2-81c7-949cb23910d4",
+      "name": "OPCOES"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v24.0/1007910339064845/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Chaves de acesso').item.json['WHATSAPP-TOKEN'] }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={{ JSON.stringify({\n  messaging_product: \"whatsapp\",\n  to: $('Mensage DATA').item.json.phone,\n  type: \"interactive\",\n  interactive: {\n    type: \"list\",\n    body: {\n      text: \"Escolhe a cidade pra eu te mostrar o card\u00e1pio certinho:\"\n    },\n    action: {\n      button: \"Ver cidades\",\n      sections: [\n        {\n          title: \"Cidades\",\n          rows: [\n            { id: \"cardapio_curitiba\",  title: \"1\ufe0f\u20e3 Curitiba / PR\" },\n            { id: \"cardapio_londrina\",  title: \"2\ufe0f\u20e3 Londrina / PR\" },\n            { id: \"cardapio_saopaulo\", title: \"3\ufe0f\u20e3 S\u00e3o Paulo / SP\" }\n          ]\n        }\n      ]\n    }\n  }\n}) }}\n",
+        "options": {}
+      },
+      "id": "2006c582-c973-4cc6-9743-537503982895",
+      "name": "SEND MENU ADMIN",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -3344,
+        -464
+      ],
+      "retryOnFail": false,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://172.17.0.1:3001/mcp",
+        "serverTransport": "sse",
+        "include": "selected",
+        "includeTools": [
+          "mcp_cardapio"
+        ],
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        -3936,
+        -96
+      ],
+      "id": "89ffed73-918c-4836-bb24-f74b122c2578",
+      "name": "cardapio"
+    }
+  ],
+  "connections": {
+    "SET DEFAULT MESSAGE": {
+      "main": [
+        [
+          {
+            "node": "STORE MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SET REPLIED MESSAGE": {
+      "main": [
+        [
+          {
+            "node": "STORE MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SET EDITED MESSAGE": {
+      "main": [
+        [
+          {
+            "node": "STORE MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SET AUDIO MESSAGE": {
+      "main": [
+        [
+          {
+            "node": "STORE MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SET IMAGE MESSAGE": {
+      "main": [
+        [
+          {
+            "node": "STORE MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "STORE MESSAGE": {
+      "main": [
+        [
+          {
+            "node": "Redis bloqueio por tempo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RETRIEVE LAST MESSAGES": {
+      "main": [
+        [
+          {
+            "node": "UserMessage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tipo da Mensagem": {
+      "main": [
+        [
+          {
+            "node": "SET DEFAULT MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SET REPLIED MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SET EDITED MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI1": {
+      "main": [
+        [
+          {
+            "node": "SET IMAGE MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI": {
+      "main": [
+        [
+          {
+            "node": "SET AUDIO MESSAGE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "SEND IMAGE": {
+      "main": [
+        []
+      ]
+    },
+    "SEND VIDEO": {
+      "main": [
+        []
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "SEND IMAGE",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SEND VIDEO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SEND TEXT1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DELETE HISTORY": {
+      "main": [
+        [
+          {
+            "node": "block timeout1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TEXT": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Kah",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TIMEOUT1": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tipo da Mensagem1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenAI1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "block timeout",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "block timeout2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis bloqueio por tempo": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "RETRIEVE LAST MESSAGES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "block timeout": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "block timeout1": {
+      "main": [
+        [
+          {
+            "node": "Kah",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UserMessage": {
+      "main": [
+        [
+          {
+            "node": "DELETE HISTORY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "Mensage DATA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kah": {
+      "main": [
+        [
+          {
+            "node": "OPCOES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "reservas": {
+      "ai_tool": [
+        [
+          {
+            "node": "Kah",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "admincontact": {
+      "ai_tool": [
+        [
+          {
+            "node": "Kah",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "current_Date": {
+      "ai_tool": [
+        [
+          {
+            "node": "Kah",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Kah",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook WhatsApp1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensage DATA": {
+      "main": [
+        [
+          {
+            "node": "Redis2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis2": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Chaves de acesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chaves de acesso": {
+      "main": [
+        [
+          {
+            "node": "Redis (Set Lock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis (Set Lock)": {
+      "main": [
+        [
+          {
+            "node": "Wait 30s (TTL)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "no_file1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 30s (TTL)": {
+      "main": [
+        [
+          {
+            "node": "Redis (Release Lock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis (Release Lock)": {
+      "main": [
+        []
+      ]
+    },
+    "SEND TEXT1": {
+      "main": [
+        []
+      ]
+    },
+    "no_file1": {
+      "main": [
+        [
+          {
+            "node": "Tipo da Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tipo da Mensagem1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OPCOES": {
+      "main": [
+        [
+          {
+            "node": "SEND MENU",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SEND MENU CIDADES",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SEND MENU ADMIN",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TEXT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cardapio": {
+      "ai_tool": [
+        [
+          {
+            "node": "Kah",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "000ddc3340bd572bb0156eece3fb35f0994b1b02efafffb2337e193ef6a2a87c"
+  }
+}
