@@ -6,7 +6,7 @@ version: '3.8'
 services:
   # Python LangChain Agent
   langchain:
-    image: kharina-langchain:latest
+    image: kharina-langchain-v2:latest
     build:
       context: ./python-langchain
       dockerfile: Dockerfile
@@ -45,7 +45,7 @@ services:
 
   # Node.js Backend (refactored)
   backend:
-    image: kharina-backend:latest
+    image: kharina-backend-v2:latest
     build:
       context: ./nodejs-bot/backend
       dockerfile: Dockerfile
