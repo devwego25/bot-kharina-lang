@@ -355,6 +355,57 @@ function displayReservationCode(picked: { id?: string; code?: string }): string 
   return undefined;
 }
 
+function statusLabel(raw: any): string {
+  const v = String(raw || '').toLowerCase();
+  const map: Record<string, string> = {
+    confirmed: 'Confirmada',
+    waiting: 'Em espera',
+    cancelled: 'Cancelada',
+    canceled: 'Cancelada'
+  };
+  return map[v] || String(raw || '');
+}
+
+async function queryReservationsDeterministic(from: string): Promise<{ ok: boolean; message: string }> {
+  const phone = toDigitsPhone(from);
+  const mcpReady = await ensureReservasMcpReady();
+  if (!mcpReady) {
+    return { ok: false, message: 'Tive uma instabilidade para consultar suas reservas agora 😕' };
+  }
+
+  try {
+    const result = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
+    const payload = parseMcpToolText(result);
+    const all = Array.isArray(payload?.reservations) ? payload.reservations : [];
+    const active = all.filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'));
+
+    if (active.length === 0) {
+      return { ok: true, message: 'Não encontrei reservas ativas no seu número no momento.' };
+    }
+
+    const lines = ['Encontrei estas reservas no seu número:'];
+    active.slice(0, 5).forEach((r: any, idx: number) => {
+      const code = displayReservationCode({
+        id: r?.reservationId || r?.id,
+        code: r?.code || r?.reservationCode
+      }) || 'N/A';
+      lines.push(
+        `${idx + 1}. 🔢 Código: ${code}\n` +
+        `📍 Unidade: ${r?.storeName || r?.store || 'N/A'}\n` +
+        `📅 Data: ${toBrDate(r?.date || '')}\n` +
+        `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
+        `👥 Pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
+        `✅ Status: ${statusLabel(r?.status)}`
+      );
+    });
+    lines.push('Se quiser, eu também posso cancelar ou alterar uma delas.');
+    return { ok: true, message: lines.join('\n\n') };
+  } catch (err: any) {
+    console.error('[ReservasDeterministic] query_reservations failed:', err?.message || err);
+    return { ok: false, message: 'Não consegui consultar suas reservas agora. Pode tentar novamente em instantes?' };
+  }
+}
+
 async function createReservationDeterministic(from: string, state: UserState): Promise<{ ok: boolean; message: string; }> {
   const r = state.reservation || {};
   const storeId = state.preferred_store_id;
@@ -437,13 +488,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       };
     }
 
-    const statusMap: Record<string, string> = {
-      confirmed: 'Confirmada',
-      waiting: 'Em espera',
-      cancelled: 'Cancelada',
-      canceled: 'Cancelada'
-    };
-    const statusLabel = statusMap[String(picked.status || '').toLowerCase()] || (picked.status ? String(picked.status) : undefined);
+    const status = picked.status ? statusLabel(picked.status) : undefined;
 
     const lines = [
       `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
@@ -452,7 +497,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `👥 Pessoas: ${people}`,
       `👶 Crianças: ${kids}`,
       displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
-      statusLabel ? `✅ Status: ${statusLabel}` : ''
+      status ? `✅ Status: ${status}` : ''
     ].filter(Boolean);
 
     state.reservation = undefined;
@@ -811,7 +856,9 @@ async function handleDeterministicCommand(
     normalized.includes('fazer reserva') ||
     normalized.includes('reservar mesa');
   const isReservationManageIntent =
-    /\b(minha(s)? reserva(s)?|consult(a|ar)|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
+    /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
+  const isReservationQueryIntent =
+    /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
   const timeOnlyPattern =
     /\bhoje\b/.test(normalized) &&
     /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
@@ -841,6 +888,13 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, compact);
+    return true;
+  }
+
+  // Natural language reservation intent -> traditional interactive flow
+  if (isReservationQueryIntent && !isInActiveFlow(state)) {
+    const q = await queryReservationsDeterministic(from);
+    await sendWhatsAppText(from, q.message);
     return true;
   }
 
