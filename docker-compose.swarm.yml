@@ -28,6 +28,16 @@ services:
       - KharinaNet  # To reach cardapio_app
     deploy:
       replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+        failure_action: rollback
+        monitor: 20s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -72,6 +82,16 @@ services:
       - traefik-public
     deploy:
       replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+        failure_action: rollback
+        monitor: 20s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
       restart_policy:
         condition: on-failure
         delay: 5s
