@@ -1908,14 +1908,23 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // If confirmation is pending, accept plain-text confirmations as button equivalent.
     const textLower = text.toLowerCase().trim();
-    if (state.reservation?.awaiting_confirmation && /^(sim|ok|confirmo|pode confirmar|tudo certo|esta tudo certo|está tudo certo)$/.test(textLower)) {
+    const textNorm = textLower
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (
+      state.reservation?.awaiting_confirmation &&
+      /^(sim|ok|confirmo|confirmar|pode confirmar|pode finalizar|sim pode confirmar|sim pode finalizar|sim confirmar|sim finalizar|tudo certo|esta tudo certo)$/.test(textNorm)
+    ) {
       text = 'confirm_reserva_sim';
-    } else if (state.reservation?.awaiting_confirmation && /^(nao|não|corrigir|alterar|mudar|nao esta certo|não está certo)$/.test(textLower)) {
+    } else if (state.reservation?.awaiting_confirmation && /^(nao|corrigir|alterar|mudar|nao esta certo)$/.test(textNorm)) {
       text = 'confirm_reserva_nao';
-    } else if (state.reservation?.awaiting_cancellation && /^(sim|ok|confirmo|sim cancelar|pode cancelar)$/.test(textLower)) {
+    } else if (state.reservation?.awaiting_cancellation && /^(sim|ok|confirmo|sim cancelar|pode cancelar)$/.test(textNorm)) {
       const pendingId = String(state.reservation?.pending_cancellation_id || '').trim();
       if (pendingId) text = `cancel_yes_${pendingId}`;
-    } else if (state.reservation?.awaiting_cancellation && /^(nao|não|manter|nao cancelar|não cancelar)$/.test(textLower)) {
+    } else if (state.reservation?.awaiting_cancellation && /^(nao|manter|nao cancelar)$/.test(textNorm)) {
       text = 'cancel_no';
     }
 
