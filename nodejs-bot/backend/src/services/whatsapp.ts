@@ -57,6 +57,7 @@ const botActiveCache = new Map<string, { value: boolean; at: number }>();
 
 const INTERACTIVE_DEGRADED_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second between messages
+const FLOW_IDLE_RESET_MS = 10 * 60 * 1000; // reset in-progress flow after inactivity
 const GRAPH_API_TIMEOUT_MS = 8000;
 const BOT_ACTIVE_CACHE_TTL_MS = 15_000;
 const BOT_ACTIVE_TIMEOUT_MS = 700;
@@ -2033,7 +2034,19 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // Get/create user state
     let state: UserState = userStates.get(from) ?? {};
+    const nowMs = Date.now();
+    if (state.last_message_timestamp && (nowMs - state.last_message_timestamp) > FLOW_IDLE_RESET_MS) {
+      if (state.reservation || state.preferred_store_id || state.preferred_unit_name) {
+        console.log(`[Flow] Resetting stale in-progress flow for ${from} after ${nowMs - state.last_message_timestamp}ms inactivity`);
+      }
+      state.reservation = undefined;
+      state.preferred_store_id = undefined;
+      state.preferred_unit_name = undefined;
+    }
+    state.last_message_timestamp = nowMs;
     if (!userStates.has(from)) {
+      userStates.set(from, state);
+    } else {
       userStates.set(from, state);
     }
 
