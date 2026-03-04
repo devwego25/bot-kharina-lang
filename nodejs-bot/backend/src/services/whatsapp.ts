@@ -1264,6 +1264,22 @@ async function handleDeterministicCommand(
         await sendWhatsAppText(from, 'Não consegui localizar uma reserva ativa para cancelar agora. Se você acabou de confirmar, aguarde 1 minuto e me peça novamente para cancelar.');
         return true;
       }
+      if (active.length === 1) {
+        const selected = active[0];
+        state.reservation = {
+          ...(state.reservation || {}),
+          awaiting_cancellation: true,
+          pending_cancellation_id: selected.reservationId,
+          pending_cancellation_code: selected.code
+        };
+        userStates.set(from, state);
+        await sendCancelConfirmationMenu(
+          from,
+          selected.reservationId,
+          `Confirma o cancelamento da reserva ${selected.code} (${toBrDate(selected.date)} às ${selected.time}, ${selected.storeName})?`
+        );
+        return true;
+      }
       if (isCancelAllIntent) {
         state.reservation = {
           ...(state.reservation || {}),
