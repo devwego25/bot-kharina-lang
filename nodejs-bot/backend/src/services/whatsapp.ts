@@ -14,6 +14,7 @@ import { redisService } from './redis';
 import { chatwootService } from './chatwoot';
 import { db } from './db';
 import { langchainService } from './langchain';
+import { McpClient } from './mcp';
 import axios from 'axios';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
@@ -73,6 +74,15 @@ const BOT_MESSAGE_PATTERNS = [
   /^(você quer fazer um novo pedido|sinto muito pelo problema)/i,
   /^(prontinho!? ?✅? ?já encaminhei)/i,
 ];
+
+const reservasMcp = new McpClient(
+  process.env.MCP_RESERVAS_URL || 'https://mcp.reservas.wegosb.com.br/mcp',
+  'Reservas',
+  process.env.MCP_RESERVAS_TOKEN,
+  false,
+  'streamable'
+);
+let reservasMcpInitPromise: Promise<boolean> | null = null;
 
 // ============ Helper Functions ============
 
@@ -269,6 +279,158 @@ function extractUserInput(text: string): string {
   }
 
   return cleaned.trim();
+}
+
+async function ensureReservasMcpReady(): Promise<boolean> {
+  if (reservasMcp.ready) return true;
+  if (!reservasMcpInitPromise) {
+    reservasMcp.connect();
+    reservasMcpInitPromise = reservasMcp.waitReady(20000).finally(() => {
+      reservasMcpInitPromise = null;
+    });
+  }
+  return reservasMcpInitPromise;
+}
+
+function toDigitsPhone(raw: string): string {
+  return String(raw || '').replace(/\D/g, '');
+}
+
+function parseMcpToolText(result: any): any {
+  try {
+    const text = result?.content?.[0]?.text;
+    if (typeof text === 'string' && text.trim()) return JSON.parse(text);
+  } catch { }
+  return result;
+}
+
+function normalizeIsoDate(value: string): string {
+  const v = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const m = v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return v;
+}
+
+function normalizeTime(value: string): string {
+  const v = String(value || '').trim();
+  const m = v.match(/^(\d{1,2})(?::(\d{2}))?$/);
+  if (!m) return v;
+  return `${m[1].padStart(2, '0')}:${(m[2] || '00').padStart(2, '0')}`;
+}
+
+function pickReservationCode(res: any): { id?: string; code?: string; status?: string } {
+  const payload = parseMcpToolText(res);
+  if (!payload || typeof payload !== 'object') return {};
+  return {
+    id: payload.reservationId || payload.id || payload.data?.id,
+    code: payload.code || payload.reservationCode || payload.data?.code,
+    status: payload.status || payload.data?.status
+  };
+}
+
+async function createReservationDeterministic(from: string, state: UserState): Promise<{ ok: boolean; message: string; }> {
+  const r = state.reservation || {};
+  const storeId = state.preferred_store_id;
+  const unitName = state.preferred_unit_name || 'unidade selecionada';
+  const phone = toDigitsPhone(r.contact_phone || from);
+  const date = normalizeIsoDate(r.date_text || '');
+  const time = normalizeTime(r.time_text || '');
+  const people = Number(r.people || 0);
+  const kids = Number(r.kids ?? 0);
+  const name = String(r.name || '').trim();
+
+  if (!storeId || !phone || !date || !time || !people) {
+    return {
+      ok: false,
+      message: 'Faltaram alguns dados obrigatórios para concluir a reserva. Vamos revisar rapidinho pelo resumo. 🙏'
+    };
+  }
+
+  const mcpReady = await ensureReservasMcpReady();
+  if (!mcpReady) {
+    return { ok: false, message: 'Tive uma instabilidade técnica para acessar o sistema de reservas agora.' };
+  }
+
+  const createArgs = {
+    clientPhone: phone,
+    storeId,
+    date,
+    time,
+    numberOfPeople: people,
+    kids
+  };
+
+  try {
+    let createResult: any;
+    try {
+      createResult = await reservasMcp.callTool('create_reservation', createArgs);
+    } catch (err: any) {
+      const msg = String(err?.message || '').toLowerCase();
+      if (msg.includes('client') || msg.includes('cliente') || msg.includes('not found') || msg.includes('não encontrado')) {
+        if (name) {
+          await reservasMcp.callTool('create_client', { name, phone });
+          createResult = await reservasMcp.callTool('create_reservation', createArgs);
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    let picked = pickReservationCode(createResult);
+
+    // Silent verification to prevent false positives.
+    const verifyResult = await reservasMcp.callTool('query_reservations', { clientPhone: phone });
+    const verifyPayload = parseMcpToolText(verifyResult);
+    const items = Array.isArray(verifyPayload?.reservations) ? verifyPayload.reservations : [];
+    const matched = items.find((x: any) =>
+      normalizeIsoDate(x?.date) === date &&
+      normalizeTime(x?.time) === time &&
+      Number(x?.numberOfPeople || x?.people) === people &&
+      String(x?.storeId || '').toLowerCase() === String(storeId).toLowerCase() &&
+      !String(x?.status || '').toLowerCase().includes('cancel')
+    );
+
+    if (matched) {
+      picked = {
+        id: matched.reservationId || matched.id || picked.id,
+        code: matched.code || matched.reservationCode || picked.code,
+        status: matched.status || picked.status
+      };
+    }
+
+    if (!picked.id && !picked.code) {
+      return {
+        ok: false,
+        message: 'Não consegui validar o código da reserva no retorno do sistema. Vou manter os dados e tentar novamente.'
+      };
+    }
+
+    const lines = [
+      `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
+      `📅 Data: ${date}`,
+      `⏰ Horário: ${time}`,
+      `👥 Pessoas: ${people}`,
+      `👶 Crianças: ${kids}`,
+      picked.code ? `🔢 Código da reserva: ${picked.code}` : '',
+      picked.id ? `🆔 ID da reserva: ${picked.id}` : '',
+      picked.status ? `✅ Status: ${picked.status}` : ''
+    ].filter(Boolean);
+
+    state.reservation = undefined;
+    userStates.set(from, state);
+    return { ok: true, message: lines.join('\n') };
+  } catch (err: any) {
+    console.error('[ReservasDeterministic] create_reservation failed:', err?.message || err);
+    if (state.reservation) state.reservation.awaiting_confirmation = true;
+    userStates.set(from, state);
+    return {
+      ok: false,
+      message: 'Tive uma instabilidade para concluir sua reserva agora 😕\nVou reenviar a confirmação para tentarmos novamente.'
+    };
+  }
 }
 
 // ============ Graph API Helpers ============
@@ -809,7 +971,12 @@ async function handleDeterministicCommand(
   // Confirmation buttons
   if (text === 'confirm_reserva_sim') {
     await sendWhatsAppText(from, 'Perfeito! ✅ Estou verificando sua reserva agora, só um instante...');
-    return false; // Let Python agent handle
+    const done = await createReservationDeterministic(from, state);
+    await sendWhatsAppText(from, done.message);
+    if (!done.ok) {
+      await sendConfirmationMenu(from, state);
+    }
+    return true;
   }
 
   if (text === 'confirm_reserva_nao') {
