@@ -760,7 +760,11 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
   try {
     const from = message.from;
     const contact = value?.contacts?.[0];
-    const userName = contact?.profile?.name || from;
+    const rawPushName = contact?.profile?.name || '';
+    // Only treat as real name if it contains non-digit characters (not a phone number fallback)
+    const hasRealName = rawPushName.trim().length > 0 && !/^[\d+\s\-().]+$/.test(rawPushName.trim());
+    const userName = hasRealName ? rawPushName : from; // for Chatwoot / logs
+    const userNameForAgent = hasRealName ? rawPushName : undefined; // undefined = agent will ask
 
     // Extract text
     let text = '';
@@ -834,7 +838,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     const sessionId = `whatsapp_${from}`;
     const result = await langchainService.processMessage(sessionId, text, {
       phone: from,
-      user_name: userName,
+      user_name: userNameForAgent,    // undefined when no push name → agent will ask
       preferred_store_id: state.preferred_store_id,
       preferred_unit_name: state.preferred_unit_name,
       preferred_city: state.preferred_city,
