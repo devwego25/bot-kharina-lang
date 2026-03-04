@@ -514,6 +514,7 @@ async function handleDeterministicCommand(
   state: UserState
 ): Promise<boolean> {
   const normalized = text.trim().toLowerCase();
+  const isGreeting = GREETING_COMMANDS.has(normalized);
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
@@ -526,6 +527,14 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, true);
+    return true;
+  }
+
+  // First contact greeting -> open main menu immediately
+  if (isGreeting && !state.has_interacted && !isInActiveFlow(state)) {
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await sendMainMenu(from, false);
     return true;
   }
 
