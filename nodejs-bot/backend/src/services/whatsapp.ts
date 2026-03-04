@@ -83,6 +83,78 @@ function formatBrazilPhone(raw: string): string {
   return raw;
 }
 
+function toIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseReservationDetails(text: string): Partial<ReservationState> {
+  const t = (text || '').toLowerCase().trim();
+  const updates: Partial<ReservationState> = {};
+
+  const peopleMatch =
+    t.match(/\b(\d+)\s*(pessoa|pessoas|adulto|adultos)\b/) ||
+    t.match(/\b(pessoas?|adultos?)\s*(\d+)\b/);
+  if (peopleMatch) {
+    const val = parseInt((peopleMatch[1] || peopleMatch[2] || '0'), 10);
+    if (!Number.isNaN(val) && val > 0) updates.people = val;
+  }
+
+  if (/sem crian/.test(t) || /\b0\s*(crianca|criança|criancas|crianças)\b/.test(t)) {
+    updates.kids = 0;
+  } else {
+    const kidsMatch = t.match(/\b(\d+)\s*(crianca|criança|criancas|crianças)\b/);
+    if (kidsMatch) {
+      const k = parseInt(kidsMatch[1], 10);
+      if (!Number.isNaN(k) && k >= 0) updates.kids = k;
+    }
+  }
+
+  const today = new Date();
+  if (/\bhoje\b/.test(t)) {
+    updates.date_text = toIsoDate(today);
+  } else if (/\bamanh/.test(t)) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + 1);
+    updates.date_text = toIsoDate(d);
+  } else {
+    const dmY = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+    if (dmY) {
+      const day = parseInt(dmY[1], 10);
+      const mon = parseInt(dmY[2], 10);
+      let year = dmY[3] ? parseInt(dmY[3], 10) : today.getFullYear();
+      if (year < 100) year += 2000;
+      if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) {
+        updates.date_text = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+  }
+
+  let hh: string | null = null;
+  let mm = '00';
+  const hm = t.match(/\b(\d{1,2})[:h](\d{2})\b/);
+  if (hm) {
+    hh = hm[1];
+    mm = hm[2];
+  } else {
+    const hOnly = t.match(/\b(\d{1,2})\s*h\b/);
+    if (hOnly) hh = hOnly[1];
+    else {
+      const hWord = t.match(/\b(?:as|às)\s*(\d{1,2})\b/);
+      if (hWord && /(noite|tarde|manha|manhã)/.test(t)) hh = hWord[1];
+    }
+  }
+  if (hh !== null) {
+    let h = parseInt(hh, 10);
+    if (/noite|tarde/.test(t) && h >= 1 && h <= 11) h += 12;
+    if (h >= 0 && h <= 23) updates.time_text = `${String(h).padStart(2, '0')}:${mm}`;
+  }
+
+  return updates;
+}
+
 function sanitizeWhatsAppText(text: string): string {
   if (!text) return text;
   return text
@@ -729,6 +801,31 @@ async function handleDeterministicCommand(
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Sem problemas! 😊 Me diz o que você quer alterar (nome, data, horário, pessoas ou crianças).');
     return true;
+  }
+
+  // Deterministic slot-filling while in active reservation flow
+  if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
+    const extracted = parseReservationDetails(text);
+    if (Object.keys(extracted).length > 0) {
+      state.reservation = { ...(state.reservation || {}), ...extracted };
+      userStates.set(from, state);
+
+      const missing: string[] = [];
+      if (!state.reservation.people) missing.push('quantas pessoas');
+      if (!state.reservation.date_text) missing.push('a data');
+      if (!state.reservation.time_text) missing.push('o horário');
+
+      if (missing.length > 0) {
+        await sendWhatsAppText(from, `Perfeito! ✅ Agora me confirma ${missing.join(' e ')}.`);
+        return true;
+      }
+
+      userStates.set(from, state);
+      await sendConfirmationMenu(from, state);
+      state.reservation.awaiting_confirmation = true;
+      userStates.set(from, state);
+      return true;
+    }
   }
 
   return false;
