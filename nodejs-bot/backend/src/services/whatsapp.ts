@@ -1817,6 +1817,15 @@ async function handleDeterministicCommand(
 
   // Phone confirmation
   if (text === 'phone_use_current') {
+    if (!state.preferred_unit_name || !state.preferred_store_id) {
+      await sendWhatsAppText(
+        from,
+        'Perfeito! ✅ Antes de continuar, me confirma novamente a unidade da reserva para evitar qualquer erro.'
+      );
+      await sendUnidadesMenu(from);
+      return true;
+    }
+
     state.reservation = state.reservation || {};
     state.reservation.phone_confirmed = true;
     state.reservation.contact_phone = from;
