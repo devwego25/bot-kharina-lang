@@ -870,6 +870,48 @@ async function createReservationDeterministic(from: string, state: UserState): P
 
     const displayCode = displayReservationCode(picked);
     if (!picked.id) {
+      // Second-chance path: try to self-heal before failing customer flow.
+      try {
+        if (name) {
+          // Defensive upsert-like attempt (ignore "already exists" style errors).
+          await callReservasToolWithTimeout(
+            'create_client',
+            { name, phone },
+            { timeoutMs: 12000, retries: 1, retryDelayMs: 400 }
+          ).catch(() => undefined);
+        }
+
+        const retryCreateResult = await callReservasToolWithTimeout(
+          'create_reservation',
+          createArgs,
+          { timeoutMs: 25000, retries: 1, retryDelayMs: 900 }
+        );
+        let retryPicked = pickReservationCode(retryCreateResult);
+
+        // Longer polling window to handle eventual consistency on MCP/Reservas.
+        const retryMatched = await waitForReservationMatchWithId(
+          { phone, storeId, date, time, people: totalPeople },
+          12,
+          2000
+        );
+
+        if (retryMatched) {
+          retryPicked = {
+            id: retryMatched.id || retryPicked.id,
+            code: retryMatched.code || retryPicked.code,
+            status: retryMatched.status || retryPicked.status
+          };
+        }
+
+        if (retryPicked.id) {
+          picked = retryPicked;
+        }
+      } catch (retryErr: any) {
+        console.error('[ReservasDeterministic] second-chance create failed:', retryErr?.message || retryErr);
+      }
+    }
+
+    if (!picked.id) {
       const alertMsg = [
         'ALERTA RESERVA: criação sem ID confirmado.',
         `Telefone: +${phone}`,
