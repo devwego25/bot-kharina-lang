@@ -7,6 +7,29 @@ redis.on('connect', () => console.log('[Redis] Connected'));
 redis.on('error', (err) => console.error('[Redis] Error:', err));
 
 export const redisService = {
+  getUserState: async (userId: string): Promise<any | null> => {
+    try {
+      const data = await redis.get(`state:${userId}`);
+      return data ? JSON.parse(data) : null;
+    } catch (err) {
+      console.error('[Redis] Error getting user state:', err);
+      return null;
+    }
+  },
+
+  saveUserState: async (userId: string, state: any) => {
+    try {
+      await redis.set(
+        `state:${userId}`,
+        JSON.stringify(state),
+        'EX',
+        config.redis.ttl
+      );
+    } catch (err) {
+      console.error('[Redis] Error saving user state:', err);
+    }
+  },
+
   /**
    * Get conversation history for a user
    */
@@ -91,9 +114,14 @@ export const redisService = {
    */
   clearUser: async (userId: string) => {
     try {
-      const keys = await redis.keys(`*:${userId}*`);
-      if (keys.length > 0) {
-        await redis.del(...keys);
+      const patterns = [`hist:${userId}`, `state:${userId}`, `cdedup:${userId}:*`];
+      const keys = new Set<string>();
+      for (const pattern of patterns) {
+        const matched = await redis.keys(pattern);
+        matched.forEach((key) => keys.add(key));
+      }
+      if (keys.size > 0) {
+        await redis.del(...Array.from(keys));
       }
     } catch (err) {
       console.error('[Redis] Error clearing user:', err);

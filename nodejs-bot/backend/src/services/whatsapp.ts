@@ -113,6 +113,14 @@ const reservasMcp = new McpClient(
   'streamable'
 );
 let reservasMcpInitPromise: Promise<boolean> | null = null;
+const userStatesSet = userStates.set.bind(userStates);
+userStates.set = ((userId: string, state: UserState) => {
+  userStatesSet(userId, state);
+  redisService.saveUserState(userId, state).catch((err) => {
+    console.error('[State] Failed to persist user state:', err?.message || err);
+  });
+  return userStates;
+}) as typeof userStates.set;
 
 // ============ Helper Functions ============
 
@@ -2150,7 +2158,15 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
 
     // Get/create user state
-    let state: UserState = userStates.get(from) ?? {};
+    let state: UserState | undefined = userStates.get(from);
+    if (!state) {
+      const persistedState = await redisService.getUserState(from);
+      if (persistedState && typeof persistedState === 'object') {
+        state = persistedState as UserState;
+        userStates.set(from, state);
+      }
+    }
+    state = state ?? {};
     const nowMs = Date.now();
     if (state.last_message_timestamp && (nowMs - state.last_message_timestamp) > FLOW_IDLE_RESET_MS) {
       if (state.reservation || state.preferred_store_id || state.preferred_unit_name) {
@@ -2312,11 +2328,13 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     // Update state from any remaining state_updates keys
     if (result.state_updates) {
       const { reservation_state, ...rest } = result.state_updates as any;
-      state = { ...state, ...rest };
-      userStates.set(from, state);
+      const nextState: UserState = { ...(state || {}), ...rest };
+      state = nextState;
+      userStates.set(from, nextState);
     }
 
     // Mark as interacted
+    state = state || {};
     state.has_interacted = true;
     userStates.set(from, state);
     logStep('total', totalStart);
