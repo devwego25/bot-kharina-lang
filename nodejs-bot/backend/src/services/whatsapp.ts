@@ -736,6 +736,68 @@ async function sendManageReservationMenu(to: string, action: 'cancel' | 'alter',
   );
 }
 
+async function beginAlterReservationFlow(
+  from: string,
+  state: UserState,
+  selected: ActiveReservation,
+  initialText?: string
+): Promise<void> {
+  state.preferred_store_id = selected.storeId || state.preferred_store_id;
+  state.preferred_unit_name = selected.storeName || state.preferred_unit_name;
+  state.reservation = {
+    ...(state.reservation || {}),
+    phone_confirmed: true,
+    contact_phone: from,
+    date_text: selected.date || state.reservation?.date_text,
+    time_text: selected.time || state.reservation?.time_text,
+    kids: selected.kids ?? state.reservation?.kids,
+    people: selected.kids !== undefined
+      ? Math.max(0, selected.people - Number(selected.kids || 0))
+      : (state.reservation?.people ?? selected.people),
+    pending_change_source_id: selected.reservationId,
+    pending_change_source_code: selected.code,
+    awaiting_confirmation: false
+  };
+
+  const incoming = String(initialText || '').trim();
+  if (incoming) {
+    const extracted = parseReservationDetails(incoming);
+    const deltas = extractPartyDeltas(incoming);
+    if (deltas) {
+      if (deltas.adultsDelta !== 0 && state.reservation.people !== undefined && extracted.people === undefined) {
+        extracted.people = Math.max(1, Number(state.reservation.people) + deltas.adultsDelta);
+      }
+      if (deltas.kidsDelta !== 0 && state.reservation.kids !== undefined && extracted.kids === undefined) {
+        extracted.kids = Math.max(0, Number(state.reservation.kids) + deltas.kidsDelta);
+      }
+    }
+    if (Object.keys(extracted).length > 0) {
+      state.reservation = { ...(state.reservation || {}), ...extracted };
+    }
+  }
+
+  userStates.set(from, state);
+
+  const missing: string[] = [];
+  if (!state.reservation?.people) missing.push('o número de adultos');
+  if (!state.reservation?.date_text) missing.push('a data');
+  if (!state.reservation?.time_text) missing.push('o horário');
+  if (state.reservation?.kids === undefined) missing.push('se terá crianças (e quantas)');
+
+  if (missing.length === 0) {
+    await sendWhatsAppText(from, `Perfeito! ✅ Atualizei a reserva ${selected.code} com os dados que você mandou.`);
+    await sendConfirmationMenu(from, state);
+    if (state.reservation) state.reservation.awaiting_confirmation = true;
+    userStates.set(from, state);
+    return;
+  }
+
+  await sendWhatsAppText(
+    from,
+    `Perfeito! Vamos alterar a reserva ${selected.code}. Me confirma só ${missing.join(' e ')}.`
+  );
+}
+
 async function queryReservationsDeterministic(from: string): Promise<{ ok: boolean; message: string }> {
   try {
     const phone = toDigitsPhone(from);
@@ -1536,6 +1598,10 @@ async function handleDeterministicCommand(
         await sendWhatsAppText(from, 'Não encontrei reservas ativas para alterar no seu número.');
         return true;
       }
+      if (active.length === 1) {
+        await beginAlterReservationFlow(from, state, active[0], text);
+        return true;
+      }
       await sendManageReservationMenu(from, 'alter', active);
       return true;
     }
@@ -1650,27 +1716,7 @@ async function handleDeterministicCommand(
       if (active.length > 0) await sendManageReservationMenu(from, 'alter', active);
       return true;
     }
-    state.preferred_store_id = selected.storeId || state.preferred_store_id;
-    state.preferred_unit_name = selected.storeName || state.preferred_unit_name;
-    state.reservation = {
-      ...(state.reservation || {}),
-      phone_confirmed: true,
-      contact_phone: from,
-      date_text: selected.date || state.reservation?.date_text,
-      time_text: selected.time || state.reservation?.time_text,
-      kids: selected.kids ?? state.reservation?.kids,
-      people: selected.kids !== undefined
-        ? Math.max(0, selected.people - Number(selected.kids || 0))
-        : (state.reservation?.people ?? selected.people),
-      pending_change_source_id: selected.reservationId,
-      pending_change_source_code: selected.code,
-      awaiting_confirmation: false
-    };
-    userStates.set(from, state);
-    await sendWhatsAppText(
-      from,
-      `Perfeito! Vamos alterar a reserva ${selected.code}. Me envie em uma mensagem: data, horário, número de adultos, crianças (se houver) e observações (opcional).`
-    );
+    await beginAlterReservationFlow(from, state, selected);
     return true;
   }
 
