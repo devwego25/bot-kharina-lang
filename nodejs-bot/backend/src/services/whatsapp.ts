@@ -1545,6 +1545,9 @@ async function handleDeterministicCommand(
 
   if (isThanks && !isInActiveFlow(state)) {
     await sendWhatsAppText(from, 'Imagina! 😊 Sempre que precisar, estou por aqui para ajudar com reservas, cardápio ou delivery.');
+    await sendWhatsAppSticker(from, '1296835615764631').catch((err) => {
+      console.error('[WhatsApp] Thanks sticker async failed:', err?.message || err);
+    });
     return true;
   }
 
