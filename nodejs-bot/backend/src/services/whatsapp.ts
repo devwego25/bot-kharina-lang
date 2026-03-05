@@ -77,6 +77,16 @@ const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
   unidade_saopaulo: { name: 'São Paulo', storeId: '03dc5466-6c32-4e9e-b92f-c8b02e74bba6' }
 };
 
+const UNIT_PHONE_BY_NAME: Record<string, string> = {
+  'Jardim Botânico': '(41) 3092-0449',
+  'Cabral': '(41) 99288-6397',
+  'Água Verde': '(41) 98811-6685',
+  'Batel': '(41) 3203-4940',
+  'Portão': '(41) 3083-7600',
+  'Londrina': '(43) 3398-9191',
+  'São Paulo': '(11) 5432-0052'
+};
+
 const UNIT_TEXT_MATCHERS: Array<{ rx: RegExp; id: keyof typeof UNIT_CONFIG }> = [
   { rx: /\bjardim\s*botanico\b|\bbotanico\b/, id: 'unidade_botanico' },
   { rx: /\bcabral\b/, id: 'unidade_cabral' },
@@ -324,6 +334,28 @@ function sanitizeWhatsAppText(text: string): string {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '$2')
     .replace(/^[#{1,6}]\s+/gm, '')
     .trim();
+}
+
+function sanitizeAgentFallbackPhone(text: string, from: string, state?: UserState): string {
+  if (!text) return text;
+  const t = String(text);
+  const lower = t.toLowerCase();
+  const isUnitFallback =
+    lower.includes('unidade') &&
+    (lower.includes('falar direto') || lower.includes('telefone') || lower.includes('contato'));
+  if (!isUnitFallback) return t;
+
+  const unitName = String(state?.preferred_unit_name || '').trim();
+  const unitPhone = UNIT_PHONE_BY_NAME[unitName];
+  if (!unitPhone) return t;
+
+  const fromDigits = toDigitsPhone(from);
+  if (!fromDigits) return t;
+
+  return t.replace(/\+?\d[\d\s().-]{8,}\d/g, (raw) => {
+    const digits = raw.replace(/\D/g, '');
+    return digits === fromDigits ? unitPhone : raw;
+  });
 }
 
 function shouldOfferMainMenu(result: any, state?: UserState): boolean {
@@ -1325,6 +1357,12 @@ async function handleDeterministicCommand(
     .replace(/[\u0300-\u036f]/g, '');
   const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
+  const isBirthdayCakeQuestion =
+    /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
+    /\b(pode|permitid|autoriz|levar|trazer)\b/.test(normalizedNoAccent);
+  const isCorkageQuestion =
+    /\b(rolha|vinho|bebida(?:s)?\s+de\s+casa|bebida\s+de\s+fora)\b/.test(normalizedNoAccent) &&
+    /\b(pode|permitid|autoriz|levar|trazer|tem|custa|cobra|taxa)\b/.test(normalizedNoAccent);
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
@@ -1360,6 +1398,24 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, false);
+    return true;
+  }
+
+  if (isBirthdayCakeQuestion) {
+    const unit = state.preferred_unit_name ? ` da unidade ${state.preferred_unit_name}` : '';
+    await sendWhatsAppText(
+      from,
+      `Sim! 🎂 Pode levar bolo de aniversário${unit}. Se quiser, já deixo essa observação na reserva também. 😊`
+    );
+    return true;
+  }
+
+  if (isCorkageQuestion) {
+    const unit = state.preferred_unit_name ? ` na unidade ${state.preferred_unit_name}` : '';
+    await sendWhatsAppText(
+      from,
+      `Sim! 🍷 Trabalhamos com rolha liberada${unit}, sem custo. Pode trazer vinho ou bebida de casa sem taxa. 😊`
+    );
     return true;
   }
 
@@ -2155,7 +2211,11 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
         default:
           if (result.response) {
-            const safeResponse = sanitizeWhatsAppText(result.response);
+            const safeResponse = sanitizeAgentFallbackPhone(
+              sanitizeWhatsAppText(result.response),
+              from,
+              state
+            );
             const sendStart = Date.now();
             await sendWhatsAppText(from, safeResponse);
             logStep('sendWhatsAppText(default_ui_action)', sendStart);
@@ -2167,7 +2227,11 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     } else {
       // Regular text response
       if (result.response) {
-        const safeResponse = sanitizeWhatsAppText(result.response);
+        const safeResponse = sanitizeAgentFallbackPhone(
+          sanitizeWhatsAppText(result.response),
+          from,
+          state
+        );
         const sendStart = Date.now();
         await sendWhatsAppText(from, safeResponse);
         logStep('sendWhatsAppText(regular)', sendStart);
