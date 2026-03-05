@@ -1147,6 +1147,10 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
       });
     }
   }
+  if (compact) {
+    // Give a short gap so the previous message doesn't feel glued to the menu.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
 
   const payload = {
     messaging_product: "whatsapp",
@@ -1156,7 +1160,7 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
       type: "list",
       body: {
         text: compact
-          ? "Beleza! 👌 Escolha uma opção:"
+          ? "Se quiser, eu também posso te ajudar com reserva, delivery ou Espaço Kids. 😊\n\nEscolha uma opção:"
           : "Opa! 👋 Eu sou a Kha do Kharina 😃\nEscolha uma opção:"
       },
       action: {
