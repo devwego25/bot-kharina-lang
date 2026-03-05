@@ -1776,16 +1776,20 @@ async function handleDeterministicCommand(
 
   if (text === 'delivery_ajuda') {
     const city = state.preferred_city || 'Curitiba';
+    const phoneLondrina = await db.getConfig('phone_londrina') || '(41) 99265-3755';
+    const phoneCabral = await db.getConfig('phone_cabral') || '(41) 99288-6397';
+    const phoneAguaVerde = await db.getConfig('phone_agua_verde') || '(41) 98811-6685';
+
     const msg = city === 'Londrina'
-      ? `Puxa, lamento pelo inconveniente! 😕\n\nPra gente resolver isso da melhor forma, entra em contato direto com a unidade de Londrina:\n📱 (43) 3398-9191`
+      ? `Puxa, lamento pelo inconveniente! 😕\n\nPra gente resolver isso da melhor forma, entra em contato direto com a unidade de Londrina:\n📱 ${phoneLondrina}`
       : [
         'Puxa, lamento pelo inconveniente! 😕',
         '',
         '📍 *Cabral / Jardim Botânico*',
-        '📱 (41) 99288-6397',
+        `📱 ${phoneCabral}`,
         '',
         '📍 *Água Verde / Batel / Portão*',
-        '📱 (41) 98811-6685'
+        `📱 ${phoneAguaVerde}`
       ].join('\n');
 
     await sendWhatsAppText(from, msg);
