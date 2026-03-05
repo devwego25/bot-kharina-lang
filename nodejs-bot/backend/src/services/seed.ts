@@ -21,6 +21,11 @@ const initialConfigs = [
     { key: 'phone_portao', value: '(41) 3083-7600' },
     { key: 'phone_londrina', value: '(41) 99265-3755' },
     { key: 'phone_saopaulo', value: '(11) 5432-0052' },
+    { key: 'kids_instagram_batel', value: 'https://www.instagram.com/reel/C77L6sIu3h9/' },
+    { key: 'kids_instagram_botanico', value: 'https://www.instagram.com/p/DPGpsgXEVAD/' },
+    { key: 'kids_instagram_cabral', value: 'https://www.instagram.com/reels/DSkzcjYEZjd/' },
+    { key: 'kids_instagram_portao', value: 'https://www.instagram.com/reels/CvtCLhksEso/' },
+    { key: 'kids_instagram_londrina', value: 'https://www.instagram.com/reels/C4jJFDbxqml/' },
     { key: 'max_reservation_people', value: '30' },
     {
         key: 'kids_info_content',
