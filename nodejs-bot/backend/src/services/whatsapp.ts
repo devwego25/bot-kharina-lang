@@ -1789,10 +1789,12 @@ async function handleDeterministicCommand(
       : [
         'Puxa, lamento pelo inconveniente! 😕',
         '',
-        '📍 *Cabral / Jardim Botânico*',
+        'Pra gente resolver isso da melhor forma, entra em contato direto com uma dessas unidades de Curitiba:',
+        '',
+        '📍 *Cabral*',
         `📱 ${phoneCabral}`,
         '',
-        '📍 *Água Verde / Batel / Portão*',
+        '📍 *Água Verde*',
         `📱 ${phoneAguaVerde}`
       ].join('\n');
 
