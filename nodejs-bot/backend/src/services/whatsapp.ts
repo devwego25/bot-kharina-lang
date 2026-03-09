@@ -97,6 +97,33 @@ const UNIT_TEXT_MATCHERS: Array<{ rx: RegExp; id: keyof typeof UNIT_CONFIG }> = 
   { rx: /\bsao\s*paulo\b/, id: 'unidade_saopaulo' }
 ];
 
+const CHATWOOT_COMMAND_LABELS: Record<string, string> = {
+  MENU_PRINCIPAL: 'Menu principal',
+  menu_cardapio: 'Menu de cardapio',
+  cardapio_curitiba: 'Cardapio Curitiba',
+  cardapio_londrina: 'Cardapio Londrina',
+  cardapio_saopaulo: 'Cardapio Sao Paulo',
+  menu_reserva: 'Menu de reserva',
+  unidade_botanico: 'Unidade Jardim Botanico',
+  unidade_cabral: 'Unidade Cabral',
+  unidade_agua_verde: 'Unidade Agua Verde',
+  unidade_batel: 'Unidade Batel',
+  unidade_portao: 'Unidade Portao',
+  unidade_londrina: 'Unidade Londrina',
+  unidade_saopaulo: 'Unidade Sao Paulo',
+  phone_use_current: 'Confirmou uso do telefone atual',
+  phone_ask_new: 'Informar outro telefone',
+  confirm_reserva_sim: 'Confirmou resumo da reserva',
+  confirm_reserva_nao: 'Solicitou ajuste no resumo',
+  menu_delivery: 'Menu de delivery',
+  delivery_curitiba: 'Delivery Curitiba',
+  delivery_londrina: 'Delivery Londrina',
+  delivery_saopaulo: 'Delivery Sao Paulo',
+  delivery_novo: 'Delivery novo pedido',
+  delivery_ajuda: 'Delivery preciso de ajuda',
+  menu_kids: 'Menu Espaco Kids'
+};
+
 // Bot message patterns to ignore (echo detection)
 const BOT_MESSAGE_PATTERNS = [
   /^(opa!? ?👋? ?eu sou a kha|beleza!? ?👌|escolha uma opção|escolhe a cidade|qual unidade)/i,
@@ -342,6 +369,35 @@ function sanitizeWhatsAppText(text: string): string {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '$2')
     .replace(/^[#{1,6}]\s+/gm, '')
     .trim();
+}
+
+function formatIncomingForChatwoot(message: any, normalizedText: string): string {
+  const commandLabel = CHATWOOT_COMMAND_LABELS[normalizedText];
+  if (commandLabel) return `[INTERACAO] ${commandLabel}`;
+
+  if (message?.type === 'interactive') {
+    const title = message.interactive?.button_reply?.title || message.interactive?.list_reply?.title;
+    const id = message.interactive?.button_reply?.id || message.interactive?.list_reply?.id;
+    if (title && id && title !== id) return `[INTERACAO] ${title} (${id})`;
+    if (title) return `[INTERACAO] ${title}`;
+    if (id) return `[INTERACAO] ${id}`;
+  }
+
+  if (normalizedText.startsWith('alter_pick_')) return '[INTERACAO] Selecionou reserva para alteracao';
+  if (normalizedText.startsWith('cancel_pick_')) return '[INTERACAO] Selecionou reserva para cancelamento';
+  if (normalizedText.startsWith('cancel_yes_')) return '[INTERACAO] Confirmou cancelamento da reserva';
+
+  return normalizedText;
+}
+
+function buildDeterministicSyncMessage(normalizedText: string, state: UserState): string {
+  const label = CHATWOOT_COMMAND_LABELS[normalizedText];
+  if (label) return `[BOT] ${label}`;
+  if (normalizedText.startsWith('alter_pick_')) return '[BOT] Iniciou fluxo de alteracao de reserva';
+  if (normalizedText.startsWith('cancel_pick_')) return '[BOT] Iniciou fluxo de cancelamento de reserva';
+  if (normalizedText.startsWith('cancel_yes_')) return '[BOT] Processando cancelamento de reserva';
+  if (state?.last_interactive_menu) return `[BOT] ${state.last_interactive_menu}`;
+  return '[BOT] Fluxo interativo executado';
 }
 
 function sanitizeAgentFallbackPhone(text: string, from: string, state?: UserState): string {
@@ -2193,7 +2249,8 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // Send typing indicator
     sendTypingIndicator(from, message.id).catch(() => { });
-    chatwootService.syncMessage(from, userName, text, 'incoming', { source: 'whatsapp' }).catch((err) => {
+    const chatwootIncomingText = formatIncomingForChatwoot(message, text);
+    chatwootService.syncMessage(from, userName, chatwootIncomingText, 'incoming', { source: 'whatsapp' }).catch((err) => {
       console.error(`[Chatwoot] async incoming sync failed for ${from}:`, err?.message || err);
     });
 
@@ -2259,7 +2316,8 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     const handled = await handleDeterministicCommand(text, from, state, rawPushName);
     logStep('handleDeterministicCommand', deterministicStart);
     if (handled) {
-      chatwootService.syncMessage(from, userName, '[MENU_INTERATIVO]', 'outgoing', { source: 'bot' }).catch((err) => {
+      const summary = buildDeterministicSyncMessage(text, state);
+      chatwootService.syncMessage(from, userName, summary, 'outgoing', { source: 'bot' }).catch((err) => {
         console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
       });
       logStep('total_handled_deterministic', totalStart);
