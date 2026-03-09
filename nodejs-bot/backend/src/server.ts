@@ -5,6 +5,8 @@ import { db } from './services/db';
 import { langchainService } from './services/langchain';
 import configRoutes from './routes/config.routes';
 import adminRoutes from './routes/admin.routes';
+import whatsappRoutes from './routes/whatsapp.routes';
+import chatwootWebhookRoutes from './routes/chatwoot.webhook.routes';
 import { seedConfigs } from './services/seed';
 
 const app = express();
@@ -63,10 +65,12 @@ app.get('/ready', (_req, res) => {
 // ─── WhatsApp Webhook ───────────────────────────────────────────────────
 app.get('/webhook/whatsapp', verifyWebhook);
 app.post('/webhook/whatsapp', handleWhatsAppWebhook);
+app.use('/', chatwootWebhookRoutes);
 
 // ─── Admin & Config Routes ──────────────────────────────────────────────
 app.use('/api/admin', adminRoutes);
 app.use('/api/config', configRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 // ─── Legal Pages ────────────────────────────────────────────────────────
 app.get('/politica-privacidade-whatsapp', (_req, res) => {

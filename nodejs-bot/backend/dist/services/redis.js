@@ -10,6 +10,24 @@ const redis = new ioredis_1.default(env_1.config.redis.url);
 redis.on('connect', () => console.log('[Redis] Connected'));
 redis.on('error', (err) => console.error('[Redis] Error:', err));
 exports.redisService = {
+    getUserState: async (userId) => {
+        try {
+            const data = await redis.get(`state:${userId}`);
+            return data ? JSON.parse(data) : null;
+        }
+        catch (err) {
+            console.error('[Redis] Error getting user state:', err);
+            return null;
+        }
+    },
+    saveUserState: async (userId, state) => {
+        try {
+            await redis.set(`state:${userId}`, JSON.stringify(state), 'EX', env_1.config.redis.ttl);
+        }
+        catch (err) {
+            console.error('[Redis] Error saving user state:', err);
+        }
+    },
     /**
      * Get conversation history for a user
      */
@@ -59,18 +77,21 @@ exports.redisService = {
         }
     },
     /**
-     * Content-based dedup: blocks same text from same user within 30s.
+     * Content-based dedup: blocks accidental duplicates in a short window.
      * Returns true if this is a duplicate (should be skipped).
      */
     isDuplicateContent: async (userId, text) => {
         try {
             if (!text || text.trim().length === 0)
                 return false;
-            // Create a hash from userId + normalized text
             const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
+            // Don't dedupe very short messages; users often repeat "oi", "ok", etc.
+            if (normalized.length <= 3)
+                return false;
+            // Create a hash from userId + normalized text
             const key = `cdedup:${userId}:${normalized}`;
-            // Try to set with NX (only if not exists) and 30s TTL
-            const result = await redis.set(key, '1', 'EX', 30, 'NX');
+            // Try to set with NX (only if not exists) and 5s TTL
+            const result = await redis.set(key, '1', 'EX', 5, 'NX');
             // If result is null, key already existed (duplicate)
             return result !== 'OK';
         }
@@ -84,9 +105,14 @@ exports.redisService = {
      */
     clearUser: async (userId) => {
         try {
-            const keys = await redis.keys(`*:${userId}*`);
-            if (keys.length > 0) {
-                await redis.del(...keys);
+            const patterns = [`hist:${userId}`, `state:${userId}`, `cdedup:${userId}:*`];
+            const keys = new Set();
+            for (const pattern of patterns) {
+                const matched = await redis.keys(pattern);
+                matched.forEach((key) => keys.add(key));
+            }
+            if (keys.size > 0) {
+                await redis.del(...Array.from(keys));
             }
         }
         catch (err) {

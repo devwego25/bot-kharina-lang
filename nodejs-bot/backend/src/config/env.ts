@@ -42,5 +42,6 @@ export const config = {
         token: process.env.CHATWOOT_TOKEN,
         accountId: process.env.CHATWOOT_ACCOUNT_ID,
         inboxId: process.env.CHATWOOT_INBOX_ID,
+        webhookToken: process.env.CHATWOOT_WEBHOOK_TOKEN || process.env.CHATWOOT_TOKEN,
     }
 };

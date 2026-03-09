@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { McpClient } from './src/services/mcp';
 
 async function test() {

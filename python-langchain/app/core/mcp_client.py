@@ -36,7 +36,7 @@ class McpClient:
         token: Optional[str] = None,
         token_in_url: bool = False,
         transport: str = "streamable",  # "streamable" or "sse"
-        timeout: float = 30.0
+        timeout: float = 60.0
     ):
         self.url = url.rstrip("/")
         self.name = name
@@ -154,9 +154,9 @@ class McpClient:
 
         max_attempts = 2 if tool_name in {"create_reservation", "check_availability"} else 1
         request_timeout = (
-            65.0 if tool_name == "create_reservation"
-            else 45.0 if tool_name == "check_availability"
-            else self.timeout
+            90.0 if tool_name == "create_reservation"
+            else 60.0 if tool_name == "check_availability"
+            else 60.0  # Increased from default 30s/40s
         )
 
         try:
@@ -302,7 +302,7 @@ async def get_mcp_clients() -> Dict[str, McpClient]:
             token=settings.MCP_RESERVAS_TOKEN,
             token_in_url=False,
             transport="streamable",
-            timeout=40.0
+            timeout=60.0
         )
 
         # Connect all clients

@@ -10,6 +10,8 @@ const db_1 = require("./services/db");
 const langchain_1 = require("./services/langchain");
 const config_routes_1 = __importDefault(require("./routes/config.routes"));
 const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
+const whatsapp_routes_1 = __importDefault(require("./routes/whatsapp.routes"));
+const chatwoot_webhook_routes_1 = __importDefault(require("./routes/chatwoot.webhook.routes"));
 const seed_1 = require("./services/seed");
 const app = (0, express_1.default)();
 function renderLegalPage(title, contentHtml) {
@@ -61,9 +63,11 @@ app.get('/ready', (_req, res) => {
 // ─── WhatsApp Webhook ───────────────────────────────────────────────────
 app.get('/webhook/whatsapp', whatsapp_1.verifyWebhook);
 app.post('/webhook/whatsapp', whatsapp_1.handleWhatsAppWebhook);
+app.use('/', chatwoot_webhook_routes_1.default);
 // ─── Admin & Config Routes ──────────────────────────────────────────────
 app.use('/api/admin', admin_routes_1.default);
 app.use('/api/config', config_routes_1.default);
+app.use('/api/whatsapp', whatsapp_routes_1.default);
 // ─── Legal Pages ────────────────────────────────────────────────────────
 app.get('/politica-privacidade-whatsapp', (_req, res) => {
     res
