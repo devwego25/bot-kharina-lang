@@ -86,7 +86,14 @@ def detect_intent(message: str, output: str, tool_calls: list) -> str:
     """Detect conversation intent."""
     msg_lower = message.lower()
     
-    # Check for reservation-related intents
+    # Check for complaints first to prevent context switching
+    complaint_keywords = ["reclamacao", "reclamação", "queixa", "problema", "veio errado", "diferente", "atrasado", "ifood", "péssimo", "cade meu pedido", "onde esta meu pedido"]
+    is_complaint = any(word in msg_lower for word in complaint_keywords)
+    
+    if is_complaint:
+        return "reclamacao"
+
+    # Check for reservation-related intents (only if not a complaint)
     if any(word in msg_lower for word in ["reserv", "mesa", "horário", "data"]):
         if tool_calls and any(t.get("tool") in ["create_reservation", "check_availability"] for t in tool_calls):
             return "criar_reserva"
@@ -101,7 +108,7 @@ def detect_intent(message: str, output: str, tool_calls: list) -> str:
     if any(word in msg_lower for word in ["cardápio", "cardapio", "prato", "comida"]):
         return "cardapio"
     
-    if any(word in msg_lower for word in ["delivery", "entrega", "ifood"]):
+    if any(word in msg_lower for word in ["delivery", "entrega"]):
         return "delivery"
     
     return "general"
