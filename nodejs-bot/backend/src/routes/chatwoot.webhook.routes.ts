@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { config } from '../config/env';
-import { sendWhatsAppText } from '../services/whatsapp';
+import { sendWhatsAppText, wasRecentlyMirroredByBot } from '../services/whatsapp';
 
 const router = Router();
 
@@ -80,6 +80,12 @@ router.post('/webhook/chatwoot', async (req: Request, res: Response) => {
   if (!to) {
     console.warn('[Chatwoot Relay] No target phone found in payload');
     res.status(200).json({ ok: true, ignored: 'missing_phone' });
+    return;
+  }
+
+  if (wasRecentlyMirroredByBot(to, content)) {
+    console.log('[Chatwoot Relay] Ignored: recently_mirrored_by_bot');
+    res.status(200).json({ ok: true, ignored: 'recently_mirrored_by_bot' });
     return;
   }
 

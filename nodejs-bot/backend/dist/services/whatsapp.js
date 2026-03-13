@@ -13,6 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.handleWhatsAppWebhook = exports.verifyWebhook = void 0;
+exports.wasRecentlyMirroredByBot = wasRecentlyMirroredByBot;
 exports.sendWhatsAppText = sendWhatsAppText;
 const env_1 = require("../config/env");
 const redis_1 = require("./redis");
@@ -25,6 +26,7 @@ const socks_proxy_agent_1 = require("socks-proxy-agent");
 // In-memory state (consider moving to Redis for multi-instance)
 const userStates = new Map();
 const lastOutboundByUser = new Map();
+const recentOutboundContentByUser = new Map();
 const interactiveDegradedUntil = new Map();
 const userProcessingQueue = new Map();
 const botActiveCache = new Map();
@@ -38,6 +40,7 @@ const GRAPH_API_TIMEOUT_MS = 8000;
 const BOT_ACTIVE_CACHE_TTL_MS = 15_000;
 const BOT_ACTIVE_TIMEOUT_MS = 700;
 const STORES_HOURS_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
@@ -262,6 +265,32 @@ function captureOutboundMessage(userId, content, attributes = { source: 'bot' },
     if (last && normalizeForOutboundDedupe(last.content) === normalized)
         return;
     queue.push({ content: trimmed, attributes, isPrivate });
+}
+function rememberRecentOutboundContent(userId, content) {
+    const trimmed = String(content || '').trim();
+    if (!trimmed)
+        return;
+    const now = Date.now();
+    const hash = normalizeForOutboundDedupe(trimmed);
+    const recent = (recentOutboundContentByUser.get(userId) || [])
+        .filter((entry) => now - entry.at <= RECENT_OUTBOUND_WINDOW_MS);
+    recent.push({ at: now, hash });
+    recentOutboundContentByUser.set(userId, recent);
+}
+function wasRecentlyMirroredByBot(userId, content, windowMs = RECENT_OUTBOUND_WINDOW_MS) {
+    const trimmed = String(content || '').trim();
+    if (!trimmed)
+        return false;
+    const now = Date.now();
+    const hash = normalizeForOutboundDedupe(trimmed);
+    const recent = (recentOutboundContentByUser.get(userId) || [])
+        .filter((entry) => now - entry.at <= windowMs);
+    if (recent.length === 0) {
+        recentOutboundContentByUser.delete(userId);
+        return false;
+    }
+    recentOutboundContentByUser.set(userId, recent);
+    return recent.some((entry) => entry.hash === hash);
 }
 async function flushCapturedOutboundToChatwoot(from, userName, fallbackSummary) {
     const queue = capturedOutboundByUser.get(from) || [];
@@ -1291,6 +1320,7 @@ async function sendWhatsAppText(to, text) {
         text: { body: text }
     }, 'send_text', 2);
     lastOutboundByUser.set(to, { hash: normalized, at: now });
+    rememberRecentOutboundContent(to, text);
     captureOutboundMessage(to, text, { source: 'bot', kind: 'whatsapp_text' });
     console.log(`[WhatsApp] Sent to ${to}: "${text.substring(0, 80)}..."`);
 }
@@ -1328,7 +1358,7 @@ async function sendTypingIndicator(to, messageId) {
     }
     catch { }
 }
-async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText) {
+async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText, opts) {
     const now = Date.now();
     const degradedUntil = interactiveDegradedUntil.get(to) || 0;
     if (degradedUntil > now) {
@@ -1338,12 +1368,19 @@ async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText)
     }
     try {
         await postGraphMessage(menuPayload, label, 2);
-        captureOutboundMessage(to, buildInteractivePreview(menuPayload, fallbackText), {
-            source: 'bot',
-            kind: 'whatsapp_interactive',
-            interactive_label: label,
-            interactive_type: String(menuPayload?.interactive?.type || '')
-        });
+        const previewText = buildInteractivePreview(menuPayload, fallbackText);
+        if (opts?.sendCompanionTextOnSuccess) {
+            await sendWhatsAppText(to, previewText);
+        }
+        else {
+            rememberRecentOutboundContent(to, previewText);
+            captureOutboundMessage(to, previewText, {
+                source: 'bot',
+                kind: 'whatsapp_interactive',
+                interactive_label: label,
+                interactive_type: String(menuPayload?.interactive?.type || '')
+            });
+        }
         console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
         return true;
     }
@@ -1401,7 +1438,7 @@ async function sendMainMenu(to, compact = false) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_main_menu', 'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids');
+    await sendInteractiveWithFallback(to, payload, 'send_main_menu', 'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids', { sendCompanionTextOnSuccess: true });
 }
 async function sendCitiesMenu(to) {
     const payload = {
@@ -1424,7 +1461,7 @@ async function sendCitiesMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_cities_menu', 'Escolha a cidade: Curitiba, Londrina ou São Paulo.');
+    await sendInteractiveWithFallback(to, payload, 'send_cities_menu', 'Escolha a cidade: Curitiba, Londrina ou São Paulo.', { sendCompanionTextOnSuccess: true });
 }
 async function sendUnidadesMenu(to) {
     const payload = {
@@ -1451,7 +1488,7 @@ async function sendUnidadesMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_unidades_menu', 'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).');
+    await sendInteractiveWithFallback(to, payload, 'send_unidades_menu', 'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).', { sendCompanionTextOnSuccess: true });
 }
 async function sendPhoneConfirmation(to) {
     const payload = {
@@ -1556,7 +1593,7 @@ async function sendDeliveryChoiceMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_delivery_choice_menu', 'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?');
+    await sendInteractiveWithFallback(to, payload, 'send_delivery_choice_menu', 'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?', { sendCompanionTextOnSuccess: true });
 }
 async function sendDeliveryCitiesMenu(to) {
     const payload = {
@@ -1579,7 +1616,7 @@ async function sendDeliveryCitiesMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu', 'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo');
+    await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu', 'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo', { sendCompanionTextOnSuccess: true });
 }
 // ============ Command Handlers ============
 function isInActiveFlow(state) {

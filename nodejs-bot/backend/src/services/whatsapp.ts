@@ -54,9 +54,15 @@ interface CapturedOutboundMessage {
   isPrivate?: boolean;
 }
 
+interface RecentOutboundEntry {
+  at: number;
+  hash: string;
+}
+
 // In-memory state (consider moving to Redis for multi-instance)
 const userStates = new Map<string, UserState>();
 const lastOutboundByUser = new Map<string, { hash: string; at: number }>();
+const recentOutboundContentByUser = new Map<string, RecentOutboundEntry[]>();
 const interactiveDegradedUntil = new Map<string, number>();
 const userProcessingQueue = new Map<string, Promise<void>>();
 const botActiveCache = new Map<string, { value: boolean; at: number }>();
@@ -71,6 +77,7 @@ const GRAPH_API_TIMEOUT_MS = 8000;
 const BOT_ACTIVE_CACHE_TTL_MS = 15_000;
 const BOT_ACTIVE_TIMEOUT_MS = 700;
 const STORES_HOURS_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 
 // Command sets
@@ -315,6 +322,37 @@ function captureOutboundMessage(
   if (last && normalizeForOutboundDedupe(last.content) === normalized) return;
 
   queue.push({ content: trimmed, attributes, isPrivate });
+}
+
+function rememberRecentOutboundContent(userId: string, content: string): void {
+  const trimmed = String(content || '').trim();
+  if (!trimmed) return;
+
+  const now = Date.now();
+  const hash = normalizeForOutboundDedupe(trimmed);
+  const recent = (recentOutboundContentByUser.get(userId) || [])
+    .filter((entry) => now - entry.at <= RECENT_OUTBOUND_WINDOW_MS);
+
+  recent.push({ at: now, hash });
+  recentOutboundContentByUser.set(userId, recent);
+}
+
+export function wasRecentlyMirroredByBot(userId: string, content: string, windowMs = RECENT_OUTBOUND_WINDOW_MS): boolean {
+  const trimmed = String(content || '').trim();
+  if (!trimmed) return false;
+
+  const now = Date.now();
+  const hash = normalizeForOutboundDedupe(trimmed);
+  const recent = (recentOutboundContentByUser.get(userId) || [])
+    .filter((entry) => now - entry.at <= windowMs);
+
+  if (recent.length === 0) {
+    recentOutboundContentByUser.delete(userId);
+    return false;
+  }
+
+  recentOutboundContentByUser.set(userId, recent);
+  return recent.some((entry) => entry.hash === hash);
 }
 
 async function flushCapturedOutboundToChatwoot(from: string, userName: string, fallbackSummary?: string): Promise<void> {
@@ -1480,6 +1518,7 @@ export async function sendWhatsAppText(to: string, text: string): Promise<void> 
   }, 'send_text', 2);
 
   lastOutboundByUser.set(to, { hash: normalized, at: now });
+  rememberRecentOutboundContent(to, text);
   captureOutboundMessage(to, text, { source: 'bot', kind: 'whatsapp_text' });
   console.log(`[WhatsApp] Sent to ${to}: "${text.substring(0, 80)}..."`);
 }
@@ -1523,7 +1562,8 @@ async function sendInteractiveWithFallback(
   to: string,
   menuPayload: any,
   label: string,
-  fallbackText?: string
+  fallbackText?: string,
+  opts?: { sendCompanionTextOnSuccess?: boolean }
 ): Promise<boolean> {
   const now = Date.now();
   const degradedUntil = interactiveDegradedUntil.get(to) || 0;
@@ -1535,16 +1575,22 @@ async function sendInteractiveWithFallback(
 
   try {
     await postGraphMessage(menuPayload, label, 2);
-    captureOutboundMessage(
-      to,
-      buildInteractivePreview(menuPayload, fallbackText),
-      {
-        source: 'bot',
-        kind: 'whatsapp_interactive',
-        interactive_label: label,
-        interactive_type: String(menuPayload?.interactive?.type || '')
-      }
-    );
+    const previewText = buildInteractivePreview(menuPayload, fallbackText);
+    if (opts?.sendCompanionTextOnSuccess) {
+      await sendWhatsAppText(to, previewText);
+    } else {
+      rememberRecentOutboundContent(to, previewText);
+      captureOutboundMessage(
+        to,
+        previewText,
+        {
+          source: 'bot',
+          kind: 'whatsapp_interactive',
+          interactive_label: label,
+          interactive_type: String(menuPayload?.interactive?.type || '')
+        }
+      );
+    }
     console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
     return true;
   } catch (err: any) {
@@ -1605,7 +1651,8 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_main_menu',
-    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids');
+    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids',
+    { sendCompanionTextOnSuccess: true });
 }
 
 async function sendCitiesMenu(to: string): Promise<void> {
@@ -1630,7 +1677,8 @@ async function sendCitiesMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_cities_menu',
-    'Escolha a cidade: Curitiba, Londrina ou São Paulo.');
+    'Escolha a cidade: Curitiba, Londrina ou São Paulo.',
+    { sendCompanionTextOnSuccess: true });
 }
 
 async function sendUnidadesMenu(to: string): Promise<void> {
@@ -1659,7 +1707,8 @@ async function sendUnidadesMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_unidades_menu',
-    'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).');
+    'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).',
+    { sendCompanionTextOnSuccess: true });
 }
 
 async function sendPhoneConfirmation(to: string): Promise<void> {
@@ -1776,7 +1825,8 @@ async function sendDeliveryChoiceMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_delivery_choice_menu',
-    'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?');
+    'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?',
+    { sendCompanionTextOnSuccess: true });
 }
 
 async function sendDeliveryCitiesMenu(to: string): Promise<void> {
@@ -1801,7 +1851,8 @@ async function sendDeliveryCitiesMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu',
-    'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo');
+    'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo',
+    { sendCompanionTextOnSuccess: true });
 }
 
 // ============ Command Handlers ============
