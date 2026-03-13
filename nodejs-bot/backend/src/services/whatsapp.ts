@@ -2172,19 +2172,34 @@ async function sendAdminReservationSummary(to: string): Promise<void> {
     return;
   }
 
-  const stats = await reservasAdminApiService.getReservationStats();
-  const storeLines = (stats.reservationsByStore || [])
-    .slice()
-    .sort((a, b) => String(a.storeName || '').localeCompare(String(b.storeName || '')))
-    .map((item) => `- *${item.storeName}:* ${item.count}`);
+  const [globalStats, storeStats] = await Promise.all([
+    reservasAdminApiService.getReservationStats(),
+    Promise.all(
+      Object.values(UNIT_CONFIG).map(async (unit) => ({
+        name: unit.name,
+        stats: await reservasAdminApiService.getReservationStats(unit.storeId),
+      }))
+    ),
+  ]);
+
+  const todayStoreLines = storeStats
+    .filter((item) => Number(item.stats.todayReservations || 0) > 0)
+    .map((item) => `- *${item.name}:* ${item.stats.todayReservations}`);
+
+  const upcomingStoreLines = storeStats
+    .filter((item) => Number(item.stats.upcomingReservations || 0) > 0)
+    .map((item) => `- *${item.name}:* ${item.stats.upcomingReservations}`);
 
   const lines = [
     '*Resumo Geral de Reservas*',
-    `*Hoje:* ${stats.todayReservations}`,
-    `*Total confirmadas:* ${stats.confirmedReservations}`,
     '',
-    '*Por unidade*',
-    ...(storeLines.length > 0 ? storeLines : ['_Sem dados por unidade no momento._'])
+    '*Hoje*',
+    `*Total geral:* ${globalStats.todayReservations}`,
+    ...(todayStoreLines.length > 0 ? todayStoreLines : ['_Nenhuma reserva para hoje no momento._']),
+    '',
+    '*Próximos dias*',
+    `*Total geral:* ${globalStats.upcomingReservations}`,
+    ...(upcomingStoreLines.length > 0 ? upcomingStoreLines : ['_Nenhuma reserva futura no momento._'])
   ];
 
   await sendWhatsAppText(to, lines.join('\n'));
