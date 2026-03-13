@@ -839,6 +839,22 @@ function displayReservationCode(picked: { id?: string; code?: string }): string 
   return undefined;
 }
 
+function buildReservationIdentifierLines(picked: { id?: string; code?: string }): string[] {
+  const code = picked.code && String(picked.code).trim()
+    ? String(picked.code).trim().toUpperCase()
+    : undefined;
+  const id = picked.id && String(picked.id).trim()
+    ? String(picked.id).trim()
+    : undefined;
+  const fallback = !code && id ? String(id).split('-')[0].toUpperCase() : undefined;
+
+  return [
+    code ? `🔢 Código da reserva: ${code}` : '',
+    id ? `🆔 ID da reserva: ${id}` : '',
+    !code && fallback ? `🔎 Referência rápida: ${fallback}` : ''
+  ].filter(Boolean);
+}
+
 function statusLabel(raw: any): string {
   const v = String(raw || '').toLowerCase();
   const map: Record<string, string> = {
@@ -1332,7 +1348,6 @@ async function createReservationDeterministic(from: string, state: UserState): P
     // If client pressed confirm again, avoid duplicate creates and try to recover existing reservation first.
     const preExisting = await waitForReservationMatchWithId({ phone, storeId, date, time, people: totalPeople }, 2, 600);
     if (preExisting?.id) {
-      const recoveredCode = displayReservationCode(preExisting);
       const recoveredStatus = preExisting.status ? statusLabel(preExisting.status) : undefined;
       const recoveredLines = [
         `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
@@ -1341,8 +1356,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
         `👨 Adultos: ${adults}`,
         `👶 Crianças: ${kids}`,
         `👥 Total: ${totalPeople}`,
-        recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : '',
-        preExisting.id ? `🆔 ID da reserva: ${preExisting.id}` : '',
+        ...buildReservationIdentifierLines(preExisting),
         recoveredStatus ? `${statusEmoji(preExisting.status)} Status: ${recoveredStatus}` : ''
       ].filter(Boolean);
       state.reservation = undefined;
@@ -1388,7 +1402,6 @@ async function createReservationDeterministic(from: string, state: UserState): P
       };
     }
 
-    const displayCode = displayReservationCode(picked);
     if (!picked.id) {
       // Second-chance path: try to self-heal before failing customer flow.
       try {
@@ -1479,7 +1492,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       `Reserva confirmada com sucesso! 🎉`,
       `Nos vemos dia ${toBrDate(date)} às ${time}h na unidade ${unitName}! 🧡`,
       '',
-      displayCode ? `🔢 O seu número de protocolo/ID da reserva é: ${displayCode}` : '',
+      ...buildReservationIdentifierLines(picked),
       '',
       '⏰ Lembre-se:',
       '',
@@ -1502,13 +1515,12 @@ async function createReservationDeterministic(from: string, state: UserState): P
         2000
       );
       if (recovered?.id) {
-        const recoveredCode = displayReservationCode(recovered);
         const recoveredStatus = recovered.status ? statusLabel(recovered.status) : undefined;
         const recoveredLines = [
           `Reserva confirmada com sucesso! 🎉`,
           `Nos vemos dia ${toBrDate(date)} às ${time}h na unidade ${unitName}! 🧡`,
           '',
-          recoveredCode ? `🔢 O seu número de protocolo/ID da reserva é: ${recoveredCode}` : '',
+          ...buildReservationIdentifierLines(recovered),
           '',
           '⏰ Lembre-se:',
           '',
