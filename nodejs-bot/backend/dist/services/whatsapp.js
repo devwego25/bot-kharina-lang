@@ -1796,7 +1796,7 @@ async function sendAdminReservationsMenu(to) {
                 sections: [{
                         title: 'Reservas',
                         rows: [
-                            { id: 'admin_res_summary', title: 'Resumo da unidade', description: 'Confirmadas hoje e total confirmadas' },
+                            { id: 'admin_res_summary', title: 'Resumo geral', description: 'Compilado de todas as unidades' },
                             { id: 'admin_res_list_today', title: 'Listar reservas hoje', description: 'Reservas confirmadas com paginação' },
                             { id: 'admin_res_list_next7', title: 'Próximos 7 dias', description: 'Reservas confirmadas dos próximos 7 dias' },
                             { id: 'admin_res_list_date', title: 'Buscar por data', description: 'Consultar reservas confirmadas de uma data' },
@@ -1806,7 +1806,7 @@ async function sendAdminReservationsMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_admin_reservations_menu', 'Reservas: 1) Resumo da unidade 2) Listar reservas hoje 3) Próximos 7 dias 4) Buscar por data 5) Voltar');
+    await sendInteractiveWithFallback(to, payload, 'send_admin_reservations_menu', 'Reservas: 1) Resumo geral 2) Listar reservas hoje 3) Próximos 7 dias 4) Buscar por data 5) Voltar');
 }
 async function sendAdminReservationStoreMenu(to, view) {
     const rows = Object.entries(UNIT_CONFIG).map(([id, unit]) => ({
@@ -1846,28 +1846,23 @@ async function sendAdminReservationStoreMenu(to, view) {
 async function sendAdminReservationDatePrompt(to, storeName) {
     await sendWhatsAppText(to, `Perfeito. Agora me envie a data que você quer consultar na unidade ${storeName}, no formato DD/MM/AAAA.`);
 }
-async function sendAdminReservationSummary(to, storeId, storeName) {
+async function sendAdminReservationSummary(to) {
     if (!reservasAdminApi_1.reservasAdminApiService.isConfigured()) {
         await sendWhatsAppText(to, 'A integração da API de reservas ainda não foi configurada no bot.');
         return;
     }
-    const today = getSaoPauloTodayIso();
-    const [stats, todayList] = await Promise.all([
-        reservasAdminApi_1.reservasAdminApiService.getReservationStats(storeId),
-        reservasAdminApi_1.reservasAdminApiService.listReservations({
-            storeId,
-            startDate: today,
-            endDate: today,
-            status: 'confirmed',
-            page: 1,
-            limit: 1
-        })
-    ]);
+    const stats = await reservasAdminApi_1.reservasAdminApiService.getReservationStats();
+    const storeLines = (stats.reservationsByStore || [])
+        .slice()
+        .sort((a, b) => String(a.storeName || '').localeCompare(String(b.storeName || '')))
+        .map((item) => `• ${item.storeName}: ${item.count}`);
     const lines = [
-        `Resumo de reservas confirmadas`,
-        `• Unidade: ${storeName}`,
-        `• Hoje (${toBrDate(today)}): ${todayList.meta.total}`,
-        `• Total confirmadas: ${stats.confirmedReservations}`
+        'Resumo geral de reservas',
+        `• Hoje: ${stats.todayReservations}`,
+        `• Total confirmadas: ${stats.confirmedReservations}`,
+        '',
+        'Por unidade:',
+        ...(storeLines.length > 0 ? storeLines : ['• Sem dados por unidade no momento'])
     ];
     await sendWhatsAppText(to, lines.join('\n'));
 }
@@ -2308,15 +2303,27 @@ async function handleAdminCommand(text, from, state) {
         normalized === 'admin_res_list_today' ||
         normalized === 'admin_res_list_next7' ||
         normalized === 'admin_res_list_date') {
+        if (normalized === 'admin_res_summary') {
+            currentAdminState.step = 'reservations';
+            clearAdminReservationState(state);
+            userStates.set(from, state);
+            try {
+                await sendAdminReservationSummary(from);
+                await sendAdminReservationsMenu(from);
+            }
+            catch (err) {
+                console.error('[AdminReservations] summary query failed:', err?.response?.data || err?.message || err);
+                await sendWhatsAppText(from, 'Não consegui consultar o resumo geral agora. Tente novamente em instantes.');
+            }
+            return true;
+        }
         currentAdminState.step = 'reservation_store_pick';
         currentAdminState.reservation_view =
-            normalized === 'admin_res_summary'
-                ? 'summary'
-                : normalized === 'admin_res_list_next7'
-                    ? 'next7'
-                    : normalized === 'admin_res_list_date'
-                        ? 'date'
-                        : 'today';
+            normalized === 'admin_res_list_next7'
+                ? 'next7'
+                : normalized === 'admin_res_list_date'
+                    ? 'date'
+                    : 'today';
         currentAdminState.reservation_store_id = undefined;
         currentAdminState.reservation_store_name = undefined;
         currentAdminState.reservation_page = undefined;
@@ -2367,7 +2374,6 @@ async function handleAdminCommand(text, from, state) {
                 currentAdminState.reservation_start_date = undefined;
                 currentAdminState.reservation_end_date = undefined;
                 userStates.set(from, state);
-                await sendAdminReservationSummary(from, unit.storeId, unit.name);
                 await sendAdminReservationsMenu(from);
             }
         }

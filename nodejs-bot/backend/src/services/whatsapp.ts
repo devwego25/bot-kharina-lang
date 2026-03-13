@@ -2098,7 +2098,7 @@ async function sendAdminReservationsMenu(to: string): Promise<void> {
         sections: [{
           title: 'Reservas',
           rows: [
-            { id: 'admin_res_summary', title: 'Resumo da unidade', description: 'Confirmadas hoje e total confirmadas' },
+            { id: 'admin_res_summary', title: 'Resumo geral', description: 'Compilado de todas as unidades' },
             { id: 'admin_res_list_today', title: 'Listar reservas hoje', description: 'Reservas confirmadas com paginação' },
             { id: 'admin_res_list_next7', title: 'Próximos 7 dias', description: 'Reservas confirmadas dos próximos 7 dias' },
             { id: 'admin_res_list_date', title: 'Buscar por data', description: 'Consultar reservas confirmadas de uma data' },
@@ -2113,7 +2113,7 @@ async function sendAdminReservationsMenu(to: string): Promise<void> {
     to,
     payload,
     'send_admin_reservations_menu',
-    'Reservas: 1) Resumo da unidade 2) Listar reservas hoje 3) Próximos 7 dias 4) Buscar por data 5) Voltar'
+    'Reservas: 1) Resumo geral 2) Listar reservas hoje 3) Próximos 7 dias 4) Buscar por data 5) Voltar'
   );
 }
 
@@ -2166,30 +2166,25 @@ async function sendAdminReservationDatePrompt(to: string, storeName: string): Pr
   await sendWhatsAppText(to, `Perfeito. Agora me envie a data que você quer consultar na unidade ${storeName}, no formato DD/MM/AAAA.`);
 }
 
-async function sendAdminReservationSummary(to: string, storeId: string, storeName: string): Promise<void> {
+async function sendAdminReservationSummary(to: string): Promise<void> {
   if (!reservasAdminApiService.isConfigured()) {
     await sendWhatsAppText(to, 'A integração da API de reservas ainda não foi configurada no bot.');
     return;
   }
 
-  const today = getSaoPauloTodayIso();
-  const [stats, todayList] = await Promise.all([
-    reservasAdminApiService.getReservationStats(storeId),
-    reservasAdminApiService.listReservations({
-      storeId,
-      startDate: today,
-      endDate: today,
-      status: 'confirmed',
-      page: 1,
-      limit: 1
-    })
-  ]);
+  const stats = await reservasAdminApiService.getReservationStats();
+  const storeLines = (stats.reservationsByStore || [])
+    .slice()
+    .sort((a, b) => String(a.storeName || '').localeCompare(String(b.storeName || '')))
+    .map((item) => `• ${item.storeName}: ${item.count}`);
 
   const lines = [
-    `Resumo de reservas confirmadas`,
-    `• Unidade: ${storeName}`,
-    `• Hoje (${toBrDate(today)}): ${todayList.meta.total}`,
-    `• Total confirmadas: ${stats.confirmedReservations}`
+    'Resumo geral de reservas',
+    `• Hoje: ${stats.todayReservations}`,
+    `• Total confirmadas: ${stats.confirmedReservations}`,
+    '',
+    'Por unidade:',
+    ...(storeLines.length > 0 ? storeLines : ['• Sem dados por unidade no momento'])
   ];
 
   await sendWhatsAppText(to, lines.join('\n'));
@@ -2719,11 +2714,23 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
     normalized === 'admin_res_list_next7' ||
     normalized === 'admin_res_list_date'
   ) {
+    if (normalized === 'admin_res_summary') {
+      currentAdminState.step = 'reservations';
+      clearAdminReservationState(state);
+      userStates.set(from, state);
+      try {
+        await sendAdminReservationSummary(from);
+        await sendAdminReservationsMenu(from);
+      } catch (err: any) {
+        console.error('[AdminReservations] summary query failed:', err?.response?.data || err?.message || err);
+        await sendWhatsAppText(from, 'Não consegui consultar o resumo geral agora. Tente novamente em instantes.');
+      }
+      return true;
+    }
+
     currentAdminState.step = 'reservation_store_pick';
     currentAdminState.reservation_view =
-      normalized === 'admin_res_summary'
-        ? 'summary'
-        : normalized === 'admin_res_list_next7'
+      normalized === 'admin_res_list_next7'
           ? 'next7'
           : normalized === 'admin_res_list_date'
             ? 'date'
@@ -2778,7 +2785,6 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
         currentAdminState.reservation_start_date = undefined;
         currentAdminState.reservation_end_date = undefined;
         userStates.set(from, state);
-        await sendAdminReservationSummary(from, unit.storeId, unit.name);
         await sendAdminReservationsMenu(from);
       }
     } catch (err: any) {

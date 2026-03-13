@@ -80,7 +80,7 @@ class ReservasAdminApiService {
         }
     }
     async getReservationStats(storeId) {
-        return this.request('GET', '/admin/reservations/stats', { storeId });
+        return this.request('GET', '/admin/reservations/stats', storeId ? { storeId } : undefined);
     }
     async listReservations(input) {
         return this.request('GET', '/admin/reservations', input);

@@ -15,6 +15,10 @@ export type ReservationStatsResponse = {
   confirmedReservations: number;
   cancelledReservations: number;
   completedReservations: number;
+  reservationsByStore?: Array<{
+    storeName: string;
+    count: string | number;
+  }>;
 };
 
 export type ReservationListItem = {
@@ -116,8 +120,8 @@ class ReservasAdminApiService {
     }
   }
 
-  async getReservationStats(storeId: string): Promise<ReservationStatsResponse> {
-    return this.request<ReservationStatsResponse>('GET', '/admin/reservations/stats', { storeId });
+  async getReservationStats(storeId?: string): Promise<ReservationStatsResponse> {
+    return this.request<ReservationStatsResponse>('GET', '/admin/reservations/stats', storeId ? { storeId } : undefined);
   }
 
   async listReservations(input: {
