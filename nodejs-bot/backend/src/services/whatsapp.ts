@@ -136,6 +136,14 @@ const HAPPY_HOUR_INFO_TEXT = [
   '',
   'Se quiser, também posso te ajudar com cardápio, reserva ou delivery.'
 ].join('\n');
+const PET_FRIENDLY_INFO_TEXT = [
+  '*Pet-friendly no Kharina*',
+  'A unidade *Água Verde*, na *área externa*, é pet-friendly. 🐶',
+  '',
+  'Vamos ficar felizes em receber você e seu pet por lá.',
+  '',
+  'Se quiser, também posso te ajudar a fazer uma *reserva para a unidade Água Verde*.'
+].join('\n');
 
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
@@ -3240,6 +3248,12 @@ async function handleDeterministicCommand(
       /\b(desconto|promoc[aã]o|promocoes|promo[cç][aã]o)\b/.test(normalizedNoAccent) &&
       /\b(16h|20h|segunda|sexta|dias|horario|horarios)\b/.test(normalizedNoAccent)
     );
+  const isPetFriendlyQuestion =
+    /\bpet\s*friendly\b/.test(normalizedNoAccent) ||
+    (
+      /\b(pet|pets|cachorro|cachorros|cao|caes|c[aã]o|c[aã]es|dog|dogs)\b/.test(normalizedNoAccent) &&
+      /\b(aceita|aceitam|permit|permitido|permitida|pode|podem|entrar|levar|ir|fica|ficar|tem)\b/.test(normalizedNoAccent)
+    );
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
@@ -3303,6 +3317,11 @@ async function handleDeterministicCommand(
 
   if (isHappyHourQuestion) {
     await sendWhatsAppText(from, HAPPY_HOUR_INFO_TEXT);
+    return true;
+  }
+
+  if (isPetFriendlyQuestion) {
+    await sendWhatsAppText(from, PET_FRIENDLY_INFO_TEXT);
     return true;
   }
 
