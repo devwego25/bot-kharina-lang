@@ -64,6 +64,7 @@ interface UserState {
   preferred_city?: string;
   preferred_store_id?: string;
   preferred_unit_name?: string;
+  pending_offer?: 'pet_friendly_reservation_offer';
   has_interacted?: boolean;
   last_interactive_menu?: string;
   last_message_timestamp?: number;
@@ -3236,6 +3237,11 @@ async function handleDeterministicCommand(
   const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
   const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
+  const isOfferAcceptance =
+    isGenericAck ||
+    /^(sim quero|sim quero fazer|sim quero reservar|quero|quero fazer|quero reservar|vamos|bora|claro|com certeza|por favor)$/.test(normalizedIntent);
+  const isOfferRejection =
+    /^(nao|não|nao obrigado|não obrigado|deixa|deixa pra la|deixa pra lá|agora nao|agora não)$/.test(normalizedIntent);
   const isBirthdayCakeQuestion =
     /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
     /\b(pode|permitid|autoriz|levar|trazer)\b/.test(normalizedNoAccent);
@@ -3249,7 +3255,7 @@ async function handleDeterministicCommand(
       /\b(16h|20h|segunda|sexta|dias|horario|horarios)\b/.test(normalizedNoAccent)
     );
   const isPetFriendlyQuestion =
-    /\bpet\s*friendly\b/.test(normalizedNoAccent) ||
+    /\bpet\s*friend(?:ly)?\b/.test(normalizedNoAccent) ||
     (
       /\b(pet|pets|cachorro|cachorros|cao|caes|c[aã]o|c[aã]es|dog|dogs)\b/.test(normalizedNoAccent) &&
       /\b(aceita|aceitam|permit|permitido|permitida|pode|podem|entrar|levar|ir|fica|ficar|tem)\b/.test(normalizedNoAccent)
@@ -3316,13 +3322,38 @@ async function handleDeterministicCommand(
   }
 
   if (isHappyHourQuestion) {
+    state.pending_offer = undefined;
+    userStates.set(from, state);
     await sendWhatsAppText(from, HAPPY_HOUR_INFO_TEXT);
     return true;
   }
 
   if (isPetFriendlyQuestion) {
+    state.pending_offer = 'pet_friendly_reservation_offer';
+    userStates.set(from, state);
     await sendWhatsAppText(from, PET_FRIENDLY_INFO_TEXT);
     return true;
+  }
+
+  if (state.pending_offer === 'pet_friendly_reservation_offer') {
+    if (isOfferAcceptance || isReservationIntent) {
+      const currentPhone = state.reservation?.contact_phone;
+      state.pending_offer = undefined;
+      state.preferred_unit_name = UNIT_CONFIG.unidade_agua_verde.name;
+      state.preferred_store_id = UNIT_CONFIG.unidade_agua_verde.storeId;
+      state.reservation = currentPhone ? { contact_phone: currentPhone, phone_confirmed: false } : { phone_confirmed: false };
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Perfeito! Vou seguir com a reserva para a unidade Água Verde. ✅');
+      await sendPhoneConfirmation(from);
+      return true;
+    }
+
+    if (isOfferRejection || isThanks) {
+      state.pending_offer = undefined;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Sem problemas 😊 Se quiser, posso te ajudar com reserva, cardápio ou delivery.');
+      return true;
+    }
   }
 
   // Greeting outside active flow -> open main menu immediately
