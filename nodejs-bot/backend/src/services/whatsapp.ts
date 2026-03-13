@@ -117,6 +117,7 @@ const BOT_ACTIVE_CACHE_TTL_MS = 15_000;
 const BOT_ACTIVE_TIMEOUT_MS = 700;
 const STORES_HOURS_CACHE_TTL_MS = 10 * 60 * 1000;
 const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
+const MIN_RESERVATION_LEAD_MINUTES = 120;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 
 // Command sets
@@ -279,23 +280,44 @@ function buildReservationBlockCustomerMessage(
   requestedTime?: string
 ): string {
   const unitLabel = unitName || block.store_name || 'essa unidade';
-  const normalizedDate = normalizeIsoDate(String(requestedDate || '').trim());
-  const normalizedTime = normalizeTime(String(requestedTime || '').trim());
-  const slotLabel = normalizedDate && normalizedTime
-    ? `${toBrDate(normalizedDate)} às ${normalizedTime}`
-    : 'esse dia e horário';
-  const base = `A unidade ${unitLabel} não está mais aceitando reservas para ${slotLabel}.`;
+  const base = `A reserva para a unidade ${unitLabel} nesse dia e horário está bloqueada, então o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
   if (block.mode === 'suggest_alternative') {
-    return `${base}\n\nSe quiser, me diga outro horário ou outra unidade e eu sigo por aqui.`;
+    return `${base}\n\nSe quiser, me diga outro horário ou outra unidade e eu verifico por aqui.`;
   }
   if (block.mode === 'handoff') {
     const phone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
     if (phone) {
-      return `${base}\n\nSe preferir agilizar, você também pode falar direto com a unidade pelo telefone ${phone}.`;
+      return `${base}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você. Se preferir falar direto com a unidade, o telefone é ${phone}.`;
     }
-    return `${base}\n\nSe quiser, me diga outra unidade ou outro horário.`;
+    return `${base}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
   }
-  return `${base}\n\nSe quiser, me diga outro horário ou outra unidade.`;
+  return `${base}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
+}
+
+function buildReservationDateTime(date: string, time: string): Date | null {
+  const normalizedDate = normalizeIsoDate(String(date || '').trim());
+  const normalizedTime = normalizeTime(String(time || '').trim());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) return null;
+  if (!/^\d{2}:\d{2}$/.test(normalizedTime)) return null;
+  const reservationAt = new Date(`${normalizedDate}T${normalizedTime}:00-03:00`);
+  if (Number.isNaN(reservationAt.getTime())) return null;
+  return reservationAt;
+}
+
+function getReservationLeadTimeMessage(unitName?: string): string {
+  const unitLabel = unitName || 'essa unidade';
+  return `Para a unidade ${unitLabel}, só aceitamos reservas com pelo menos 2 horas de antecedência.\n\nSe quiser, posso verificar outro horário ou outra unidade para você.`;
+}
+
+function getReservationLeadTimeViolation(date?: string, time?: string, unitName?: string): string | null {
+  if (!date || !time) return null;
+  const reservationAt = buildReservationDateTime(date, time);
+  if (!reservationAt) return null;
+  const minAllowedAt = Date.now() + (MIN_RESERVATION_LEAD_MINUTES * 60 * 1000);
+  if (reservationAt.getTime() < minAllowedAt) {
+    return getReservationLeadTimeMessage(unitName);
+  }
+  return null;
 }
 
 async function maybeGetReservationBlock(state: UserState): Promise<ReservationBlock | null> {
@@ -1320,6 +1342,13 @@ async function createReservationDeterministic(from: string, state: UserState): P
     };
   }
 
+  const leadTimeViolation = getReservationLeadTimeViolation(date, time, unitName);
+  if (leadTimeViolation) {
+    if (state.reservation) state.reservation.awaiting_confirmation = false;
+    userStates.set(from, state);
+    return { ok: false, message: leadTimeViolation };
+  }
+
   const block = await findMatchingReservationBlock({ storeId, date, time });
   if (block) {
     if (state.reservation) state.reservation.awaiting_confirmation = false;
@@ -1498,7 +1527,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       '⏰ Lembre-se:',
       '',
       'Procure chegar 10 minutos antes',
-      'Você tem 15 minutos de tolerância',
+      'Você tem 10 minutos de tolerância',
       'Depois disso, a reserva é cancelada automaticamente ❤️'
     ].filter(line => line !== '');
 
@@ -1526,7 +1555,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
           '⏰ Lembre-se:',
           '',
           'Procure chegar 10 minutos antes',
-          'Você tem 15 minutos de tolerância',
+          'Você tem 10 minutos de tolerância',
           'Depois disso, a reserva é cancelada automaticamente ❤️'
         ].filter(line => line !== '');
         state.reservation = undefined;
@@ -2292,6 +2321,18 @@ async function sendAdminDisableBlockConfirmMenu(to: string, block: ReservationBl
 }
 
 async function sendReservationConfirmationOrBlock(to: string, state: UserState): Promise<boolean> {
+  const leadTimeViolation = getReservationLeadTimeViolation(
+    state.reservation?.date_text,
+    state.reservation?.time_text,
+    state.preferred_unit_name
+  );
+  if (leadTimeViolation) {
+    if (state.reservation) state.reservation.awaiting_confirmation = false;
+    userStates.set(to, state);
+    await sendWhatsAppText(to, leadTimeViolation);
+    return false;
+  }
+
   const block = await maybeGetReservationBlock(state);
   if (!block) {
     await sendConfirmationMenu(to, state);
