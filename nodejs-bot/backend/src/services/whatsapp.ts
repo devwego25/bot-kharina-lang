@@ -271,8 +271,19 @@ function clearAdminState(state: UserState): void {
   delete state.admin;
 }
 
-function buildReservationBlockCustomerMessage(block: ReservationBlock, unitName?: string): string {
-  const base = String(block.message || '').trim() || buildDefaultBlockMessage(block);
+function buildReservationBlockCustomerMessage(
+  block: ReservationBlock,
+  unitName?: string,
+  requestedDate?: string,
+  requestedTime?: string
+): string {
+  const unitLabel = unitName || block.store_name || 'essa unidade';
+  const normalizedDate = normalizeIsoDate(String(requestedDate || '').trim());
+  const normalizedTime = normalizeTime(String(requestedTime || '').trim());
+  const slotLabel = normalizedDate && normalizedTime
+    ? `${toBrDate(normalizedDate)} às ${normalizedTime}`
+    : 'esse dia e horário';
+  const base = `A unidade ${unitLabel} não está mais aceitando reservas para ${slotLabel}.`;
   if (block.mode === 'suggest_alternative') {
     return `${base}\n\nSe quiser, me diga outro horário ou outra unidade e eu sigo por aqui.`;
   }
@@ -1298,7 +1309,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     userStates.set(from, state);
     return {
       ok: false,
-      message: buildReservationBlockCustomerMessage(block, unitName)
+      message: buildReservationBlockCustomerMessage(block, unitName, date, time)
     };
   }
 
@@ -2275,7 +2286,15 @@ async function sendReservationConfirmationOrBlock(to: string, state: UserState):
 
   if (state.reservation) state.reservation.awaiting_confirmation = false;
   userStates.set(to, state);
-  await sendWhatsAppText(to, buildReservationBlockCustomerMessage(block, state.preferred_unit_name));
+  await sendWhatsAppText(
+    to,
+    buildReservationBlockCustomerMessage(
+      block,
+      state.preferred_unit_name,
+      state.reservation?.date_text,
+      state.reservation?.time_text
+    )
+  );
   return false;
 }
 
