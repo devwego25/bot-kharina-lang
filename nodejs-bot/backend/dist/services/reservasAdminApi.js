@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.reservasAdminApiService = void 0;
 const axios_1 = __importDefault(require("axios"));
+const socks_proxy_agent_1 = require("socks-proxy-agent");
 const env_1 = require("../config/env");
 class ReservasAdminApiService {
     http;
@@ -12,9 +13,13 @@ class ReservasAdminApiService {
     expiresAt = 0;
     loginPromise = null;
     constructor() {
+        const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+        const httpsAgent = proxyUrl ? new socks_proxy_agent_1.SocksProxyAgent(proxyUrl) : undefined;
         this.http = axios_1.default.create({
             baseURL: env_1.config.reservasApi.url,
             timeout: 15000,
+            httpsAgent,
+            proxy: false,
         });
     }
     isConfigured() {

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import { config } from '../config/env';
 
 type LoginResponse = {
@@ -47,10 +48,14 @@ class ReservasAdminApiService {
   private loginPromise: Promise<string> | null = null;
 
   constructor() {
+    const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+    const httpsAgent = proxyUrl ? new SocksProxyAgent(proxyUrl) : undefined;
     this.http = axios.create({
       baseURL: config.reservasApi.url,
       timeout: 15000,
-    });
+      httpsAgent,
+      proxy: false,
+    } as any);
   }
 
   isConfigured(): boolean {
