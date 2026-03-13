@@ -1358,7 +1358,7 @@ async function sendTypingIndicator(to, messageId) {
     }
     catch { }
 }
-async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText, opts) {
+async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText) {
     const now = Date.now();
     const degradedUntil = interactiveDegradedUntil.get(to) || 0;
     if (degradedUntil > now) {
@@ -1369,18 +1369,13 @@ async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText,
     try {
         await postGraphMessage(menuPayload, label, 2);
         const previewText = buildInteractivePreview(menuPayload, fallbackText);
-        if (opts?.sendCompanionTextOnSuccess) {
-            await sendWhatsAppText(to, previewText);
-        }
-        else {
-            rememberRecentOutboundContent(to, previewText);
-            captureOutboundMessage(to, previewText, {
-                source: 'bot',
-                kind: 'whatsapp_interactive',
-                interactive_label: label,
-                interactive_type: String(menuPayload?.interactive?.type || '')
-            });
-        }
+        rememberRecentOutboundContent(to, previewText);
+        captureOutboundMessage(to, previewText, {
+            source: 'bot',
+            kind: 'whatsapp_interactive',
+            interactive_label: label,
+            interactive_type: String(menuPayload?.interactive?.type || '')
+        });
         console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
         return true;
     }
@@ -1438,7 +1433,7 @@ async function sendMainMenu(to, compact = false) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_main_menu', 'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids', { sendCompanionTextOnSuccess: true });
+    await sendInteractiveWithFallback(to, payload, 'send_main_menu', 'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids');
 }
 async function sendCitiesMenu(to) {
     const payload = {
@@ -1461,7 +1456,7 @@ async function sendCitiesMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_cities_menu', 'Escolha a cidade: Curitiba, Londrina ou São Paulo.', { sendCompanionTextOnSuccess: true });
+    await sendInteractiveWithFallback(to, payload, 'send_cities_menu', 'Escolha a cidade: Curitiba, Londrina ou São Paulo.');
 }
 async function sendUnidadesMenu(to) {
     const payload = {
@@ -1488,7 +1483,7 @@ async function sendUnidadesMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_unidades_menu', 'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).', { sendCompanionTextOnSuccess: true });
+    await sendInteractiveWithFallback(to, payload, 'send_unidades_menu', 'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).');
 }
 async function sendPhoneConfirmation(to) {
     const payload = {
@@ -1593,7 +1588,7 @@ async function sendDeliveryChoiceMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_delivery_choice_menu', 'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?', { sendCompanionTextOnSuccess: true });
+    await sendInteractiveWithFallback(to, payload, 'send_delivery_choice_menu', 'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?');
 }
 async function sendDeliveryCitiesMenu(to) {
     const payload = {
@@ -1616,7 +1611,7 @@ async function sendDeliveryCitiesMenu(to) {
             }
         }
     };
-    await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu', 'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo', { sendCompanionTextOnSuccess: true });
+    await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu', 'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo');
 }
 // ============ Command Handlers ============
 function isInActiveFlow(state) {

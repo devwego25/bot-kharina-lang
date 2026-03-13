@@ -1562,8 +1562,7 @@ async function sendInteractiveWithFallback(
   to: string,
   menuPayload: any,
   label: string,
-  fallbackText?: string,
-  opts?: { sendCompanionTextOnSuccess?: boolean }
+  fallbackText?: string
 ): Promise<boolean> {
   const now = Date.now();
   const degradedUntil = interactiveDegradedUntil.get(to) || 0;
@@ -1576,21 +1575,17 @@ async function sendInteractiveWithFallback(
   try {
     await postGraphMessage(menuPayload, label, 2);
     const previewText = buildInteractivePreview(menuPayload, fallbackText);
-    if (opts?.sendCompanionTextOnSuccess) {
-      await sendWhatsAppText(to, previewText);
-    } else {
-      rememberRecentOutboundContent(to, previewText);
-      captureOutboundMessage(
-        to,
-        previewText,
-        {
-          source: 'bot',
-          kind: 'whatsapp_interactive',
-          interactive_label: label,
-          interactive_type: String(menuPayload?.interactive?.type || '')
-        }
-      );
-    }
+    rememberRecentOutboundContent(to, previewText);
+    captureOutboundMessage(
+      to,
+      previewText,
+      {
+        source: 'bot',
+        kind: 'whatsapp_interactive',
+        interactive_label: label,
+        interactive_type: String(menuPayload?.interactive?.type || '')
+      }
+    );
     console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
     return true;
   } catch (err: any) {
@@ -1651,8 +1646,7 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_main_menu',
-    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids',
-    { sendCompanionTextOnSuccess: true });
+    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids');
 }
 
 async function sendCitiesMenu(to: string): Promise<void> {
@@ -1677,8 +1671,7 @@ async function sendCitiesMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_cities_menu',
-    'Escolha a cidade: Curitiba, Londrina ou São Paulo.',
-    { sendCompanionTextOnSuccess: true });
+    'Escolha a cidade: Curitiba, Londrina ou São Paulo.');
 }
 
 async function sendUnidadesMenu(to: string): Promise<void> {
@@ -1707,8 +1700,7 @@ async function sendUnidadesMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_unidades_menu',
-    'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).',
-    { sendCompanionTextOnSuccess: true });
+    'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).');
 }
 
 async function sendPhoneConfirmation(to: string): Promise<void> {
@@ -1825,8 +1817,7 @@ async function sendDeliveryChoiceMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_delivery_choice_menu',
-    'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?',
-    { sendCompanionTextOnSuccess: true });
+    'Você quer: "Novo Pedido" ou "Preciso de Ajuda"?');
 }
 
 async function sendDeliveryCitiesMenu(to: string): Promise<void> {
@@ -1851,8 +1842,7 @@ async function sendDeliveryCitiesMenu(to: string): Promise<void> {
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu',
-    'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo',
-    { sendCompanionTextOnSuccess: true });
+    'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo');
 }
 
 // ============ Command Handlers ============
