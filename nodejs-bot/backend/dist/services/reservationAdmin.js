@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.normalizeAdminPhone = normalizeAdminPhone;
+exports.listConfiguredMasterPhones = listConfiguredMasterPhones;
+exports.isConfiguredMasterPhone = isConfiguredMasterPhone;
 exports.ensureConfiguredMasterAdmins = ensureConfiguredMasterAdmins;
 exports.getAdminUser = getAdminUser;
 exports.hasAnyAdminConfigured = hasAnyAdminConfigured;
@@ -68,6 +70,16 @@ async function getConfiguredMasterPhones() {
         ...env_1.config.admin.masterPhones.map((value) => normalizeAdminPhone(value)),
         ...parsePhoneList(dbConfig || '')
     ]).filter(Boolean);
+}
+async function listConfiguredMasterPhones() {
+    return getConfiguredMasterPhones();
+}
+async function isConfiguredMasterPhone(phone) {
+    const normalized = normalizeAdminPhone(phone);
+    if (!normalized)
+        return false;
+    const masters = await getConfiguredMasterPhones();
+    return masters.includes(normalized);
 }
 async function ensureConfiguredMasterAdmins() {
     if (masterSyncPromise) {
@@ -151,6 +163,9 @@ async function deactivateAdminUser(phone, actorPhone) {
     const target = await getAdminUser(normalizedPhone);
     if (!target)
         throw new Error('admin_not_found');
+    if (target.role === 'master' && await isConfiguredMasterPhone(normalizedPhone)) {
+        throw new Error('cannot_remove_bootstrap_master');
+    }
     if (target.role === 'master') {
         const result = await db_1.db.query(`SELECT COUNT(*)::int AS total FROM admin_users WHERE active = TRUE AND role = 'master'`);
         if (Number(result.rows[0]?.total || 0) <= 1) {

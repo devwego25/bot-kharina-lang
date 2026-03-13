@@ -27,6 +27,7 @@ import {
   getAdminUser,
   getReservationBlock,
   hasAnyAdminConfigured,
+  isConfiguredMasterPhone,
   listAdminUsers,
   listReservationBlocks,
   normalizeAdminPhone,
@@ -2185,17 +2186,20 @@ async function sendAdminRoleMenu(to: string, phone: string): Promise<void> {
 
 async function sendAdminRemoveAdminMenu(to: string, currentPhone: string): Promise<void> {
   const admins = await listAdminUsers();
-  const rows = admins
-    .filter((admin) => admin.phone !== normalizeAdminPhone(currentPhone))
-    .slice(0, 10)
-    .map((admin) => ({
+  const rows = [];
+  for (const admin of admins) {
+    if (admin.phone === normalizeAdminPhone(currentPhone)) continue;
+    const isFixedMaster = admin.role === 'master' && await isConfiguredMasterPhone(admin.phone);
+    if (isFixedMaster) continue;
+    rows.push({
       id: `admin_admin_remove_pick_${admin.phone}`,
       title: admin.phone,
       description: admin.role === 'master' ? 'Master' : 'Admin'
-    }));
+    });
+  }
 
   if (rows.length === 0) {
-    await sendWhatsAppText(to, 'Não encontrei outros administradores ativos para remover.');
+    await sendWhatsAppText(to, 'Não encontrei outros administradores removíveis no momento.');
     return;
   }
 
@@ -2347,7 +2351,8 @@ async function sendAdminUserList(to: string): Promise<void> {
 
   const lines = ['Administradores ativos:'];
   for (const admin of admins) {
-    lines.push(`- ${admin.phone} | ${admin.role === 'master' ? 'Master' : 'Admin'}`);
+    const isFixedMaster = admin.role === 'master' && await isConfiguredMasterPhone(admin.phone);
+    lines.push(`- ${admin.phone} | ${admin.role === 'master' ? 'Master' : 'Admin'}${isFixedMaster ? ' | fixo do sistema' : ''}`);
   }
   await sendWhatsAppText(to, lines.join('\n'));
 }
@@ -2729,6 +2734,8 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
       const reason = String(err?.message || err || '');
       if (reason === 'cannot_remove_self') {
         await sendWhatsAppText(from, 'Você não pode remover o seu próprio acesso por este menu.');
+      } else if (reason === 'cannot_remove_bootstrap_master') {
+        await sendWhatsAppText(from, 'Esse administrador master é fixo do sistema e precisa ser removido da configuração do ambiente antes.');
       } else if (reason === 'cannot_remove_last_master') {
         await sendWhatsAppText(from, 'Não posso remover o último administrador master.');
       } else {

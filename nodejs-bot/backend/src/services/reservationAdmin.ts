@@ -97,6 +97,17 @@ async function getConfiguredMasterPhones(): Promise<string[]> {
   ]).filter(Boolean);
 }
 
+export async function listConfiguredMasterPhones(): Promise<string[]> {
+  return getConfiguredMasterPhones();
+}
+
+export async function isConfiguredMasterPhone(phone: string): Promise<boolean> {
+  const normalized = normalizeAdminPhone(phone);
+  if (!normalized) return false;
+  const masters = await getConfiguredMasterPhones();
+  return masters.includes(normalized);
+}
+
 export async function ensureConfiguredMasterAdmins(): Promise<void> {
   if (masterSyncPromise) {
     await masterSyncPromise;
@@ -196,6 +207,10 @@ export async function deactivateAdminUser(phone: string, actorPhone: string): Pr
 
   const target = await getAdminUser(normalizedPhone);
   if (!target) throw new Error('admin_not_found');
+
+  if (target.role === 'master' && await isConfiguredMasterPhone(normalizedPhone)) {
+    throw new Error('cannot_remove_bootstrap_master');
+  }
 
   if (target.role === 'master') {
     const result = await db.query(`SELECT COUNT(*)::int AS total FROM admin_users WHERE active = TRUE AND role = 'master'`);
