@@ -1855,14 +1855,14 @@ async function sendAdminReservationSummary(to) {
     const storeLines = (stats.reservationsByStore || [])
         .slice()
         .sort((a, b) => String(a.storeName || '').localeCompare(String(b.storeName || '')))
-        .map((item) => `• ${item.storeName}: ${item.count}`);
+        .map((item) => `- *${item.storeName}:* ${item.count}`);
     const lines = [
-        'Resumo geral de reservas',
-        `• Hoje: ${stats.todayReservations}`,
-        `• Total confirmadas: ${stats.confirmedReservations}`,
+        '*Resumo Geral de Reservas*',
+        `*Hoje:* ${stats.todayReservations}`,
+        `*Total confirmadas:* ${stats.confirmedReservations}`,
         '',
-        'Por unidade:',
-        ...(storeLines.length > 0 ? storeLines : ['• Sem dados por unidade no momento'])
+        '*Por unidade*',
+        ...(storeLines.length > 0 ? storeLines : ['_Sem dados por unidade no momento._'])
     ];
     await sendWhatsAppText(to, lines.join('\n'));
 }
@@ -1906,14 +1906,14 @@ async function sendAdminReservationListPage(to, state) {
         ? 'Total no período'
         : 'Total na data';
     const emptyLabel = view === 'next7'
-        ? 'Nenhuma reserva confirmada para essa unidade nos próximos 7 dias.'
-        : 'Nenhuma reserva confirmada para essa unidade nessa data.';
+        ? '_Nenhuma reserva confirmada para essa unidade nos próximos 7 dias._'
+        : '_Nenhuma reserva confirmada para essa unidade nessa data._';
     const lines = [
-        title,
-        `• Unidade: ${storeName}`,
-        `• Data: ${dateLabel}`,
-        `• Página: ${response.meta.page}/${Math.max(1, response.meta.totalPages)}`,
-        `• ${totalLabel}: ${response.meta.total}`,
+        `*${title}*`,
+        `*Unidade:* ${storeName}`,
+        `*Data:* ${dateLabel}`,
+        `*Página:* ${response.meta.page}/${Math.max(1, response.meta.totalPages)}`,
+        `*${totalLabel}:* ${response.meta.total}`,
         ''
     ];
     if (response.data.length === 0) {
@@ -1925,10 +1925,10 @@ async function sendAdminReservationListPage(to, state) {
             const guests = Number(item.guests || 0);
             const kids = Number(item.kids || 0);
             const guestsLabel = kids > 0 ? `${guests} pessoas (${kids} crianças)` : `${guests} pessoas`;
-            lines.push(`${(response.meta.page - 1) * response.meta.limit + index + 1}. ${toBrDate(item.date)} ${normalizeTime(item.time)} | ${String(item.customerName || 'Cliente').trim()} | ${guestsLabel} | ${phone}`);
+            lines.push(`${(response.meta.page - 1) * response.meta.limit + index + 1}. *${toBrDate(item.date)} às ${normalizeTime(item.time)}*`, `_${String(item.customerName || 'Cliente').trim()}_`, `${guestsLabel} | ${phone}`, '');
         });
     }
-    await sendWhatsAppText(to, lines.join('\n'));
+    await sendWhatsAppText(to, lines.join('\n').trim());
     const buttons = [];
     if (response.meta.hasPreviousPage) {
         buttons.push({ type: 'reply', reply: { id: 'admin_res_list_prev', title: 'Anterior' } });
