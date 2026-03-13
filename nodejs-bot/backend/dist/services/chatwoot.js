@@ -52,20 +52,20 @@ class ChatwootService {
      * Retorna true se o bot estiver ATIVO (nenhum humano assumiu).
      * Retorna false se um humano assumiu ou se houver erro (na dúvida, pausa o bot).
      */
-    async checkBotActive(phone) {
+    async checkBotActive(phone, signal) {
         if (!this.baseUrl || !this.headers.api_access_token)
             return true;
         try {
             // 1. Buscar contato
             const searchUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/search?q=${phone}`;
-            const searchResp = await this.client.get(searchUrl, { headers: this.headers });
+            const searchResp = await this.client.get(searchUrl, { headers: this.headers, signal });
             const searchData = searchResp.data;
             const contact = searchData.payload?.[0];
             if (!contact)
                 return true; // Novo contato, bot ativo
             // 2. Buscar conversas
             const convsUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/${contact.id}/conversations`;
-            const convsResp = await this.client.get(convsUrl, { headers: this.headers });
+            const convsResp = await this.client.get(convsUrl, { headers: this.headers, signal });
             const convsData = convsResp.data;
             const conversations = convsData.payload;
             // Procurar conversa ativa (não resolvida)

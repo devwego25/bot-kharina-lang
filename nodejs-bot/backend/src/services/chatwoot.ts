@@ -50,13 +50,13 @@ export class ChatwootService {
      * Retorna true se o bot estiver ATIVO (nenhum humano assumiu).
      * Retorna false se um humano assumiu ou se houver erro (na dúvida, pausa o bot).
      */
-    async checkBotActive(phone: string): Promise<boolean> {
+    async checkBotActive(phone: string, signal?: AbortSignal): Promise<boolean> {
         if (!this.baseUrl || !this.headers.api_access_token) return true;
 
         try {
             // 1. Buscar contato
             const searchUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/search?q=${phone}`;
-            const searchResp = await this.client.get(searchUrl, { headers: this.headers });
+            const searchResp = await this.client.get(searchUrl, { headers: this.headers, signal });
             const searchData = searchResp.data as any;
             const contact = searchData.payload?.[0];
 
@@ -64,7 +64,7 @@ export class ChatwootService {
 
             // 2. Buscar conversas
             const convsUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/${contact.id}/conversations`;
-            const convsResp = await this.client.get(convsUrl, { headers: this.headers });
+            const convsResp = await this.client.get(convsUrl, { headers: this.headers, signal });
             const convsData = convsResp.data as any;
             const conversations = convsData.payload;
 

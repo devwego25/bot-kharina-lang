@@ -48,6 +48,12 @@ interface UserState {
   reservation?: ReservationState;
 }
 
+interface CapturedOutboundMessage {
+  content: string;
+  attributes?: Record<string, any>;
+  isPrivate?: boolean;
+}
+
 // In-memory state (consider moving to Redis for multi-instance)
 const userStates = new Map<string, UserState>();
 const lastOutboundByUser = new Map<string, { hash: string; at: number }>();
@@ -55,6 +61,7 @@ const interactiveDegradedUntil = new Map<string, number>();
 const userProcessingQueue = new Map<string, Promise<void>>();
 const botActiveCache = new Map<string, { value: boolean; at: number }>();
 const storesHoursCache = new Map<string, { data: any[]; at: number }>();
+const capturedOutboundByUser = new Map<string, CapturedOutboundMessage[]>();
 let reservasCallQueue: Promise<void> = Promise.resolve();
 
 const INTERACTIVE_DEGRADED_WINDOW_MS = 10 * 60 * 1000;
@@ -207,6 +214,129 @@ function toBrDate(isoOrBr: string): string {
   const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
   return v;
+}
+
+function normalizeIntentText(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractPhoneCandidate(text: string): string | null {
+  const matches = String(text || '').match(/\+?\d[\d\s().-]{8,}\d/g) || [];
+  for (const raw of matches) {
+    const digits = toDigitsPhone(raw);
+    const br = digits.startsWith('55') ? digits.slice(2) : digits;
+    if (br.length === 10 || br.length === 11) {
+      return digits.startsWith('55') ? digits : `55${digits}`;
+    }
+  }
+  return null;
+}
+
+function hasCompleteReservationData(reservation?: ReservationState): boolean {
+  return !!reservation?.people &&
+    !!reservation?.date_text &&
+    !!reservation?.time_text &&
+    reservation?.kids !== undefined;
+}
+
+function getMissingReservationFields(reservation?: ReservationState): string[] {
+  const missing: string[] = [];
+  if (!reservation?.people) missing.push('quantos adultos');
+  if (!reservation?.date_text) missing.push('a data');
+  if (!reservation?.time_text) missing.push('o horário');
+  if (reservation?.kids === undefined) missing.push('se terá crianças (e quantas)');
+  return missing;
+}
+
+function buildInteractivePreview(menuPayload: any, fallbackText?: string): string {
+  const bodyText = String(menuPayload?.interactive?.body?.text || '').trim();
+  const interactiveType = String(menuPayload?.interactive?.type || '').trim();
+
+  const optionTitles: string[] = [];
+  if (interactiveType === 'button') {
+    const buttons = Array.isArray(menuPayload?.interactive?.action?.buttons)
+      ? menuPayload.interactive.action.buttons
+      : [];
+    buttons.forEach((button: any) => {
+      const title = String(button?.reply?.title || '').trim();
+      if (title) optionTitles.push(title);
+    });
+  } else if (interactiveType === 'list') {
+    const sections = Array.isArray(menuPayload?.interactive?.action?.sections)
+      ? menuPayload.interactive.action.sections
+      : [];
+    sections.forEach((section: any) => {
+      const rows = Array.isArray(section?.rows) ? section.rows : [];
+      rows.forEach((row: any) => {
+        const title = String(row?.title || '').trim();
+        const description = String(row?.description || '').trim();
+        if (title && description) optionTitles.push(`${title} - ${description}`);
+        else if (title) optionTitles.push(title);
+      });
+    });
+  }
+
+  if (bodyText && optionTitles.length > 0) {
+    return `${bodyText}\n\nOpções:\n${optionTitles.map((title) => `- ${title}`).join('\n')}`;
+  }
+  if (bodyText) return bodyText;
+  if (fallbackText) return fallbackText;
+  return '[MENU_INTERATIVO]';
+}
+
+function beginOutboundCapture(userId: string): void {
+  capturedOutboundByUser.set(userId, []);
+}
+
+function clearOutboundCapture(userId: string): void {
+  capturedOutboundByUser.delete(userId);
+}
+
+function captureOutboundMessage(
+  userId: string,
+  content: string,
+  attributes: Record<string, any> = { source: 'bot' },
+  isPrivate = false
+): void {
+  const queue = capturedOutboundByUser.get(userId);
+  if (!queue) return;
+
+  const trimmed = String(content || '').trim();
+  if (!trimmed) return;
+
+  const normalized = normalizeForOutboundDedupe(trimmed);
+  const last = queue[queue.length - 1];
+  if (last && normalizeForOutboundDedupe(last.content) === normalized) return;
+
+  queue.push({ content: trimmed, attributes, isPrivate });
+}
+
+async function flushCapturedOutboundToChatwoot(from: string, userName: string, fallbackSummary?: string): Promise<void> {
+  const queue = capturedOutboundByUser.get(from) || [];
+  clearOutboundCapture(from);
+
+  if (queue.length === 0) {
+    if (!fallbackSummary) return;
+    await chatwootService.syncMessage(from, userName, fallbackSummary, 'outgoing', { source: 'bot', kind: 'deterministic_fallback' });
+    return;
+  }
+
+  for (const msg of queue) {
+    await chatwootService.syncMessage(
+      from,
+      userName,
+      msg.content,
+      'outgoing',
+      msg.attributes || { source: 'bot' },
+      !!msg.isPrivate
+    );
+  }
 }
 
 function parseReservationDetails(text: string): Partial<ReservationState> {
@@ -1350,6 +1480,7 @@ export async function sendWhatsAppText(to: string, text: string): Promise<void> 
   }, 'send_text', 2);
 
   lastOutboundByUser.set(to, { hash: normalized, at: now });
+  captureOutboundMessage(to, text, { source: 'bot', kind: 'whatsapp_text' });
   console.log(`[WhatsApp] Sent to ${to}: "${text.substring(0, 80)}..."`);
 }
 
@@ -1404,6 +1535,16 @@ async function sendInteractiveWithFallback(
 
   try {
     await postGraphMessage(menuPayload, label, 2);
+    captureOutboundMessage(
+      to,
+      buildInteractivePreview(menuPayload, fallbackText),
+      {
+        source: 'bot',
+        kind: 'whatsapp_interactive',
+        interactive_label: label,
+        interactive_type: String(menuPayload?.interactive?.type || '')
+      }
+    );
     console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
     return true;
   } catch (err: any) {
@@ -1687,8 +1828,10 @@ async function handleDeterministicCommand(
   const normalizedNoAccent = normalized
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+  const normalizedIntent = normalizeIntentText(text);
   const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
+  const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
   const isBirthdayCakeQuestion =
     /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
     /\b(pode|permitid|autoriz|levar|trazer)\b/.test(normalizedNoAccent);
@@ -1722,7 +1865,7 @@ async function handleDeterministicCommand(
 
   // If waiting final confirmation, keep user inside confirmation state.
   if (state.reservation?.awaiting_confirmation && text !== 'confirm_reserva_sim' && text !== 'confirm_reserva_nao') {
-    if (isGreeting || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
+    if (isGreeting || isThanks || isGenericAck || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
       await sendWhatsAppText(from, 'Estamos quase lá 😊 Para concluir, confirme os dados da reserva no botão abaixo.');
       await sendConfirmationMenu(from, state);
       return true;
@@ -2111,6 +2254,48 @@ async function handleDeterministicCommand(
     return true;
   }
 
+  if (isInActiveFlow(state) && state.preferred_unit_name && !state.reservation?.phone_confirmed) {
+    state.reservation = state.reservation || {};
+
+    const extractedPhone = extractPhoneCandidate(text);
+    if (extractedPhone) {
+      state.reservation.contact_phone = extractedPhone;
+      state.reservation.phone_confirmed = true;
+      if (!state.reservation.name) {
+        const contactName = String(profileName || '').trim();
+        if (contactName && !/^[\d+\s\-().]+$/.test(contactName)) {
+          state.reservation.name = contactName;
+        }
+      }
+      userStates.set(from, state);
+
+      if (hasCompleteReservationData(state.reservation)) {
+        await sendWhatsAppText(from, `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅`);
+        await sendConfirmationMenu(from, state);
+        state.reservation.awaiting_confirmation = true;
+        userStates.set(from, state);
+        return true;
+      }
+
+      const missing = getMissingReservationFields(state.reservation);
+      await sendWhatsAppText(from, `Perfeito! ✅ Agora me confirma ${missing.join(' e ')}.`);
+      return true;
+    }
+
+    const extracted = parseReservationDetails(text);
+    if (Object.keys(extracted).length > 0) {
+      state.reservation = { ...(state.reservation || {}), ...extracted };
+      userStates.set(from, state);
+    }
+
+    const phonePrompt = Object.keys(extracted).length > 0
+      ? `Anotei esses dados para a reserva na unidade ${state.preferred_unit_name}. ✅ Agora só preciso confirmar qual telefone devo usar.`
+      : `Para seguir com a reserva na unidade ${state.preferred_unit_name}, preciso confirmar qual telefone devo usar. 😊`;
+    await sendWhatsAppText(from, phonePrompt);
+    await sendPhoneConfirmation(from);
+    return true;
+  }
+
   // Reservation flow guard: user sent only date/time (without people count)
   if (timeOnlyPattern && isInActiveFlow(state)) {
     const extracted = parseReservationDetails(text);
@@ -2188,11 +2373,7 @@ async function handleDeterministicCommand(
       state.reservation = { ...(state.reservation || {}), ...extracted };
       userStates.set(from, state);
 
-      const missing: string[] = [];
-      if (!state.reservation.people) missing.push('quantos adultos');
-      if (!state.reservation.date_text) missing.push('a data');
-      if (!state.reservation.time_text) missing.push('o horário');
-      if (state.reservation.kids === undefined) missing.push('se terá crianças (e quantas)');
+      const missing = getMissingReservationFields(state.reservation);
 
       if (missing.length > 0) {
         if (
@@ -2217,12 +2398,7 @@ async function handleDeterministicCommand(
     }
     // Anti-loop: if all reservation data is already present, keep the user on confirmation step
     // instead of restarting data collection.
-    const hasAllData =
-      !!state.reservation?.people &&
-      !!state.reservation?.date_text &&
-      !!state.reservation?.time_text &&
-      state.reservation?.kids !== undefined;
-    if (hasAllData) {
+    if (hasCompleteReservationData(state.reservation)) {
       if (state.reservation) state.reservation.awaiting_confirmation = true;
       userStates.set(from, state);
       await sendWhatsAppText(from, 'Estamos quase lá ✅ Se estiver tudo certo no resumo, toque em *Sim, tudo certo!* para eu tentar concluir agora.');
@@ -2479,17 +2655,19 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     }
 
     // Try deterministic commands first
+    beginOutboundCapture(from);
     const deterministicStart = Date.now();
     const handled = await handleDeterministicCommand(text, from, state, rawPushName);
     logStep('handleDeterministicCommand', deterministicStart);
     if (handled) {
       const summary = buildDeterministicSyncMessage(text, state);
-      chatwootService.syncMessage(from, userName, summary, 'outgoing', { source: 'bot' }).catch((err) => {
-        console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+      flushCapturedOutboundToChatwoot(from, userName, summary).catch((err) => {
+        console.error(`[Chatwoot] async deterministic flush failed for ${from}:`, err?.message || err);
       });
       logStep('total_handled_deterministic', totalStart);
       return;
     }
+    clearOutboundCapture(from);
 
     // Call LangChain agent
     const sessionId = `whatsapp_${from}`;
@@ -2614,6 +2792,7 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     logStep('total', totalStart);
 
   } catch (error) {
+    clearOutboundCapture(message?.from || '');
     console.error('[WhatsApp] Error processing message:', error);
   }
 }

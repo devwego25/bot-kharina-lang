@@ -29,6 +29,8 @@ const interactiveDegradedUntil = new Map();
 const userProcessingQueue = new Map();
 const botActiveCache = new Map();
 const storesHoursCache = new Map();
+const capturedOutboundByUser = new Map();
+let reservasCallQueue = Promise.resolve();
 const INTERACTIVE_DEGRADED_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 1000; // 1 second between messages
 const FLOW_IDLE_RESET_MS = 120 * 60 * 1000; // keep in-progress flow for 2h before reset
@@ -39,8 +41,8 @@ const STORES_HOURS_CACHE_TTL_MS = 10 * 60 * 1000;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
-const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite']);
-const GREETING_REGEX = /\b(oi|ol[áa]|bom dia|boa tarde|boa noite|e ai|e aí|opa|tudo bem|tudo bom)\b/i;
+const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite', 'hello', 'hi']);
+const GREETING_REGEX = /\b(oi|ol[áa]|bom dia|boa tarde|boa noite|e ai|e aí|opa|tudo bem|tudo bom|hello|hi)\b/i;
 const UNIT_CONFIG = {
     unidade_botanico: { name: 'Jardim Botânico', storeId: 'a99c098f-c16b-4168-a5b1-54e76aa1a855' },
     unidade_cabral: { name: 'Cabral', storeId: 'c6919b3c-f5ff-4006-a226-2b493d9d8cf5' },
@@ -165,6 +167,115 @@ function toBrDate(isoOrBr) {
         return `${iso[3]}/${iso[2]}/${iso[1]}`;
     return v;
 }
+function normalizeIntentText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+function extractPhoneCandidate(text) {
+    const matches = String(text || '').match(/\+?\d[\d\s().-]{8,}\d/g) || [];
+    for (const raw of matches) {
+        const digits = toDigitsPhone(raw);
+        const br = digits.startsWith('55') ? digits.slice(2) : digits;
+        if (br.length === 10 || br.length === 11) {
+            return digits.startsWith('55') ? digits : `55${digits}`;
+        }
+    }
+    return null;
+}
+function hasCompleteReservationData(reservation) {
+    return !!reservation?.people &&
+        !!reservation?.date_text &&
+        !!reservation?.time_text &&
+        reservation?.kids !== undefined;
+}
+function getMissingReservationFields(reservation) {
+    const missing = [];
+    if (!reservation?.people)
+        missing.push('quantos adultos');
+    if (!reservation?.date_text)
+        missing.push('a data');
+    if (!reservation?.time_text)
+        missing.push('o horário');
+    if (reservation?.kids === undefined)
+        missing.push('se terá crianças (e quantas)');
+    return missing;
+}
+function buildInteractivePreview(menuPayload, fallbackText) {
+    const bodyText = String(menuPayload?.interactive?.body?.text || '').trim();
+    const interactiveType = String(menuPayload?.interactive?.type || '').trim();
+    const optionTitles = [];
+    if (interactiveType === 'button') {
+        const buttons = Array.isArray(menuPayload?.interactive?.action?.buttons)
+            ? menuPayload.interactive.action.buttons
+            : [];
+        buttons.forEach((button) => {
+            const title = String(button?.reply?.title || '').trim();
+            if (title)
+                optionTitles.push(title);
+        });
+    }
+    else if (interactiveType === 'list') {
+        const sections = Array.isArray(menuPayload?.interactive?.action?.sections)
+            ? menuPayload.interactive.action.sections
+            : [];
+        sections.forEach((section) => {
+            const rows = Array.isArray(section?.rows) ? section.rows : [];
+            rows.forEach((row) => {
+                const title = String(row?.title || '').trim();
+                const description = String(row?.description || '').trim();
+                if (title && description)
+                    optionTitles.push(`${title} - ${description}`);
+                else if (title)
+                    optionTitles.push(title);
+            });
+        });
+    }
+    if (bodyText && optionTitles.length > 0) {
+        return `${bodyText}\n\nOpções:\n${optionTitles.map((title) => `- ${title}`).join('\n')}`;
+    }
+    if (bodyText)
+        return bodyText;
+    if (fallbackText)
+        return fallbackText;
+    return '[MENU_INTERATIVO]';
+}
+function beginOutboundCapture(userId) {
+    capturedOutboundByUser.set(userId, []);
+}
+function clearOutboundCapture(userId) {
+    capturedOutboundByUser.delete(userId);
+}
+function captureOutboundMessage(userId, content, attributes = { source: 'bot' }, isPrivate = false) {
+    const queue = capturedOutboundByUser.get(userId);
+    if (!queue)
+        return;
+    const trimmed = String(content || '').trim();
+    if (!trimmed)
+        return;
+    const normalized = normalizeForOutboundDedupe(trimmed);
+    const last = queue[queue.length - 1];
+    if (last && normalizeForOutboundDedupe(last.content) === normalized)
+        return;
+    queue.push({ content: trimmed, attributes, isPrivate });
+}
+async function flushCapturedOutboundToChatwoot(from, userName, fallbackSummary) {
+    const queue = capturedOutboundByUser.get(from) || [];
+    clearOutboundCapture(from);
+    if (queue.length === 0) {
+        if (!fallbackSummary)
+            return;
+        await chatwoot_1.chatwootService.syncMessage(from, userName, fallbackSummary, 'outgoing', { source: 'bot', kind: 'deterministic_fallback' });
+        return;
+    }
+    for (const msg of queue) {
+        await chatwoot_1.chatwootService.syncMessage(from, userName, msg.content, 'outgoing', msg.attributes || { source: 'bot' }, !!msg.isPrivate);
+    }
+}
 function parseReservationDetails(text) {
     const raw = String(text || '').trim();
     const t = raw.toLowerCase();
@@ -253,7 +364,7 @@ function parseReservationDetails(text) {
         mm = hm[2];
     }
     else {
-        const hOnly = tNoAccent.match(/\b(\d{1,2})\s*(h|hora|horas)\b/);
+        const hOnly = tNoAccent.match(/\b(\d{1,2})\s*(h|hr|hrs|hora|horas)\b/);
         if (!hh && hOnly)
             hh = hOnly[1];
         else {
@@ -405,10 +516,8 @@ function shouldOfferMainMenu(result, state) {
     const intent = String(result?.intent || '').toLowerCase();
     const response = String(result?.response || '').toLowerCase();
     if (intent === 'error') {
-        // Don't reset to main menu if user is in the middle of reservation flow.
-        if (isInActiveFlow(state))
-            return false;
-        return true;
+        // Keep context on transient errors; avoid pushing users back to menu.
+        return false;
     }
     const noReservationHints = [
         'não possui reservas ativas',
@@ -713,10 +822,20 @@ async function callReservasToolWithTimeout(tool, args, opts) {
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-            return await Promise.race([
-                reservasMcp.callTool(tool, args),
-                new Promise((_, reject) => setTimeout(() => reject(new Error(`${tool} timeout`)), timeoutMs))
-            ]);
+            // Serialize Reservas MCP calls to avoid session contention and timeout cascades.
+            const previous = reservasCallQueue.catch(() => { });
+            let releaseQueue;
+            reservasCallQueue = new Promise((resolve) => { releaseQueue = resolve; });
+            await previous;
+            try {
+                return await Promise.race([
+                    reservasMcp.callTool(tool, args),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error(`${tool} timeout`)), timeoutMs))
+                ]);
+            }
+            finally {
+                releaseQueue?.();
+            }
         }
         catch (err) {
             lastErr = err;
@@ -1053,17 +1172,17 @@ async function createReservationDeterministic(from, state) {
             }
         }
         const lines = [
-            `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
-            `📅 Data: ${toBrDate(date)}`,
-            `⏰ Horário: ${time}`,
-            `👨 Adultos: ${adults}`,
-            `👶 Crianças: ${kids}`,
-            `👥 Total: ${totalPeople}`,
-            displayCode ? `🔢 Código da reserva: ${displayCode}` : '',
-            picked.id ? `🆔 ID da reserva: ${picked.id}` : '',
-            previousReservationCode ? `🔁 Alteração concluída (reserva anterior: ${previousReservationCode}).` : '',
-            status ? `${statusEmoji(picked.status)} Status: ${status}` : ''
-        ].filter(Boolean);
+            `Reserva confirmada com sucesso! 🎉`,
+            `Nos vemos dia ${toBrDate(date)} às ${time}h na unidade ${unitName}! 🧡`,
+            '',
+            displayCode ? `🔢 O seu número de protocolo/ID da reserva é: ${displayCode}` : '',
+            '',
+            '⏰ Lembre-se:',
+            '',
+            'Procure chegar 10 minutos antes',
+            'Você tem 15 minutos de tolerância',
+            'Depois disso, a reserva é cancelada automaticamente ❤️'
+        ].filter(line => line !== '');
         state.reservation = undefined;
         userStates.set(from, state);
         return { ok: true, message: lines.join('\n') };
@@ -1078,16 +1197,17 @@ async function createReservationDeterministic(from, state) {
                 const recoveredCode = displayReservationCode(recovered);
                 const recoveredStatus = recovered.status ? statusLabel(recovered.status) : undefined;
                 const recoveredLines = [
-                    `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
-                    `📅 Data: ${toBrDate(date)}`,
-                    `⏰ Horário: ${time}`,
-                    `👨 Adultos: ${adults}`,
-                    `👶 Crianças: ${kids}`,
-                    `👥 Total: ${totalPeople}`,
-                    recoveredCode ? `🔢 Código da reserva: ${recoveredCode}` : '',
-                    recovered.id ? `🆔 ID da reserva: ${recovered.id}` : '',
-                    recoveredStatus ? `${statusEmoji(recovered.status)} Status: ${recoveredStatus}` : ''
-                ].filter(Boolean);
+                    `Reserva confirmada com sucesso! 🎉`,
+                    `Nos vemos dia ${toBrDate(date)} às ${time}h na unidade ${unitName}! 🧡`,
+                    '',
+                    recoveredCode ? `🔢 O seu número de protocolo/ID da reserva é: ${recoveredCode}` : '',
+                    '',
+                    '⏰ Lembre-se:',
+                    '',
+                    'Procure chegar 10 minutos antes',
+                    'Você tem 15 minutos de tolerância',
+                    'Depois disso, a reserva é cancelada automaticamente ❤️'
+                ].filter(line => line !== '');
                 state.reservation = undefined;
                 userStates.set(from, state);
                 return { ok: true, message: recoveredLines.join('\n') };
@@ -1171,6 +1291,7 @@ async function sendWhatsAppText(to, text) {
         text: { body: text }
     }, 'send_text', 2);
     lastOutboundByUser.set(to, { hash: normalized, at: now });
+    captureOutboundMessage(to, text, { source: 'bot', kind: 'whatsapp_text' });
     console.log(`[WhatsApp] Sent to ${to}: "${text.substring(0, 80)}..."`);
 }
 async function sendWhatsAppSticker(to, stickerMediaIdOrLink) {
@@ -1217,6 +1338,12 @@ async function sendInteractiveWithFallback(to, menuPayload, label, fallbackText)
     }
     try {
         await postGraphMessage(menuPayload, label, 2);
+        captureOutboundMessage(to, buildInteractivePreview(menuPayload, fallbackText), {
+            source: 'bot',
+            kind: 'whatsapp_interactive',
+            interactive_label: label,
+            interactive_type: String(menuPayload?.interactive?.type || '')
+        });
         console.log(`[WhatsApp] Interactive sent successfully: ${label} to ${to}`);
         return true;
     }
@@ -1472,8 +1599,10 @@ async function handleDeterministicCommand(text, from, state, profileName) {
     const normalizedNoAccent = normalized
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '');
+    const normalizedIntent = normalizeIntentText(text);
     const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
     const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
+    const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
     const isBirthdayCakeQuestion = /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
         /\b(pode|permitid|autoriz|levar|trazer)\b/.test(normalizedNoAccent);
     const isCorkageQuestion = /\b(rolha|vinho|bebida(?:s)?\s+de\s+casa|bebida\s+de\s+fora)\b/.test(normalizedNoAccent) &&
@@ -1482,18 +1611,20 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         normalized.includes('quero reservar') ||
         normalized.includes('fazer reserva') ||
         normalized.includes('reservar mesa');
-    const isReservationManageIntent = /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
+    const isReservationLeadIntent = isReservationIntent ||
+        /(\b(consegue|quero|queria|gostaria|preciso|posso)\b.*\b(hoje|amanha|amanhã|dia\s+\d{1,2}|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo)\b)|(\b\d{1,2}\/\d{1,2}\b)/.test(normalizedNoAccent);
+    const isReservationManageIntent = /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
     const isCancelIntent = /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva|nao vou poder ir|não vou poder ir)\b/.test(normalized);
     const isCancelAllIntent = /\b(cancel(a|ar).*(todas|tudo)|todas as reservas|cancelar tudo)\b/.test(normalized);
     const isAlterIntent = /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva|trocar|troca|outro dia|nova data|tenho que alterar|preciso alterar|vamos alterar|quero trocar)\b/.test(normalized);
-    const isReservationQueryIntent = /\b(minha(s)? reserva(s)?|tenho reserva|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
+    const isReservationQueryIntent = /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
     const isHoursIntent = /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
     const timeOnlyPattern = /\bhoje\b/.test(normalized) &&
         /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
         !/\b\d+\s*(pessoa|pessoas|adulto|adultos)\b/.test(normalized);
     // If waiting final confirmation, keep user inside confirmation state.
     if (state.reservation?.awaiting_confirmation && text !== 'confirm_reserva_sim' && text !== 'confirm_reserva_nao') {
-        if (isGreeting || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
+        if (isGreeting || isThanks || isGenericAck || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
             await sendWhatsAppText(from, 'Estamos quase lá 😊 Para concluir, confirme os dados da reserva no botão abaixo.');
             await sendConfirmationMenu(from, state);
             return true;
@@ -1586,7 +1717,9 @@ async function handleDeterministicCommand(text, from, state, profileName) {
             await sendManageReservationMenu(from, 'alter', active);
             return true;
         }
-        return false; // query can still go to agent in other phrasings
+        const q = await queryReservationsDeterministic(from);
+        await sendWhatsAppText(from, q.message);
+        return true;
     }
     if (text.startsWith('cancel_pick_')) {
         const reservationId = text.replace('cancel_pick_', '').trim();
@@ -1699,7 +1832,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         return true;
     }
     // Natural language reservation intent -> traditional interactive flow
-    if (isReservationIntent && !isInActiveFlow(state)) {
+    if (isReservationLeadIntent && !isInActiveFlow(state)) {
         state.reservation = state.reservation ? { contact_phone: state.reservation.contact_phone } : undefined;
         state.has_interacted = true;
         userStates.set(from, state);
@@ -1799,28 +1932,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         await sendMainMenu(from, true);
         return true;
     }
-    if (text === 'delivery_ajuda') {
-        const city = state.preferred_city || 'Curitiba';
-        const phoneLondrina = await db_1.db.getConfig('phone_londrina') || '(41) 99265-3755';
-        const phoneCabral = await db_1.db.getConfig('phone_cabral') || '(41) 99288-6397';
-        const phoneAguaVerde = await db_1.db.getConfig('phone_agua_verde') || '(41) 98811-6685';
-        const msg = city === 'Londrina'
-            ? `Puxa, lamento pelo inconveniente! 😕\n\nPra gente resolver isso da melhor forma, entra em contato direto com a unidade de Londrina:\n📱 ${phoneLondrina}`
-            : [
-                'Puxa, lamento pelo inconveniente! 😕',
-                '',
-                'Pra gente resolver isso da melhor forma, entra em contato direto com uma dessas unidades de Curitiba:',
-                '',
-                '📍 *Cabral*',
-                `📱 ${phoneCabral}`,
-                '',
-                '📍 *Água Verde*',
-                `📱 ${phoneAguaVerde}`
-            ].join('\n');
-        await sendWhatsAppText(from, msg);
-        await sendMainMenu(from, true);
-        return true;
-    }
+    // delivery_ajuda is now handled by AI to allow better interpretation/empathy
     // Unidade selection
     if (UNIT_CONFIG[text]) {
         state.preferred_unit_name = UNIT_CONFIG[text].name;
@@ -1857,6 +1969,42 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         state.reservation.phone_confirmed = false;
         userStates.set(from, state);
         await sendWhatsAppText(from, 'Sem problemas 😊 Me envia o número que devo usar na reserva (com DDD), por favor.');
+        return true;
+    }
+    if (isInActiveFlow(state) && state.preferred_unit_name && !state.reservation?.phone_confirmed) {
+        state.reservation = state.reservation || {};
+        const extractedPhone = extractPhoneCandidate(text);
+        if (extractedPhone) {
+            state.reservation.contact_phone = extractedPhone;
+            state.reservation.phone_confirmed = true;
+            if (!state.reservation.name) {
+                const contactName = String(profileName || '').trim();
+                if (contactName && !/^[\d+\s\-().]+$/.test(contactName)) {
+                    state.reservation.name = contactName;
+                }
+            }
+            userStates.set(from, state);
+            if (hasCompleteReservationData(state.reservation)) {
+                await sendWhatsAppText(from, `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅`);
+                await sendConfirmationMenu(from, state);
+                state.reservation.awaiting_confirmation = true;
+                userStates.set(from, state);
+                return true;
+            }
+            const missing = getMissingReservationFields(state.reservation);
+            await sendWhatsAppText(from, `Perfeito! ✅ Agora me confirma ${missing.join(' e ')}.`);
+            return true;
+        }
+        const extracted = parseReservationDetails(text);
+        if (Object.keys(extracted).length > 0) {
+            state.reservation = { ...(state.reservation || {}), ...extracted };
+            userStates.set(from, state);
+        }
+        const phonePrompt = Object.keys(extracted).length > 0
+            ? `Anotei esses dados para a reserva na unidade ${state.preferred_unit_name}. ✅ Agora só preciso confirmar qual telefone devo usar.`
+            : `Para seguir com a reserva na unidade ${state.preferred_unit_name}, preciso confirmar qual telefone devo usar. 😊`;
+        await sendWhatsAppText(from, phonePrompt);
+        await sendPhoneConfirmation(from);
         return true;
     }
     // Reservation flow guard: user sent only date/time (without people count)
@@ -1936,15 +2084,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         if (Object.keys(extracted).length > 0) {
             state.reservation = { ...(state.reservation || {}), ...extracted };
             userStates.set(from, state);
-            const missing = [];
-            if (!state.reservation.people)
-                missing.push('quantos adultos');
-            if (!state.reservation.date_text)
-                missing.push('a data');
-            if (!state.reservation.time_text)
-                missing.push('o horário');
-            if (state.reservation.kids === undefined)
-                missing.push('se terá crianças (e quantas)');
+            const missing = getMissingReservationFields(state.reservation);
             if (missing.length > 0) {
                 if (deltaAppliedMessage &&
                     !extracted.date_text &&
@@ -1965,11 +2105,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         }
         // Anti-loop: if all reservation data is already present, keep the user on confirmation step
         // instead of restarting data collection.
-        const hasAllData = !!state.reservation?.people &&
-            !!state.reservation?.date_text &&
-            !!state.reservation?.time_text &&
-            state.reservation?.kids !== undefined;
-        if (hasAllData) {
+        if (hasCompleteReservationData(state.reservation)) {
             if (state.reservation)
                 state.reservation.awaiting_confirmation = true;
             userStates.set(from, state);
@@ -2073,16 +2209,21 @@ async function checkBotActiveFast(phone) {
     if (cached && (now - cached.at) <= BOT_ACTIVE_CACHE_TTL_MS) {
         return cached.value;
     }
-    const timeoutGuard = new Promise((resolve) => {
-        setTimeout(() => resolve(true), BOT_ACTIVE_TIMEOUT_MS);
-    });
-    const checkPromise = chatwoot_1.chatwootService.checkBotActive(phone)
-        .then((value) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+        controller.abort();
+    }, BOT_ACTIVE_TIMEOUT_MS);
+    try {
+        const value = await chatwoot_1.chatwootService.checkBotActive(phone, controller.signal);
+        clearTimeout(timeoutId);
         botActiveCache.set(phone, { value, at: Date.now() });
         return value;
-    })
-        .catch(() => true);
-    return Promise.race([checkPromise, timeoutGuard]);
+    }
+    catch (err) {
+        clearTimeout(timeoutId);
+        console.warn(`[Chatwoot] checkBotActiveFast error or timeout for ${phone}:`, err?.message);
+        return true; // Fallback to active
+    }
 }
 async function processMessageInternal(message, value) {
     try {
@@ -2199,17 +2340,19 @@ async function processMessageInternal(message, value) {
             text = 'cancel_no';
         }
         // Try deterministic commands first
+        beginOutboundCapture(from);
         const deterministicStart = Date.now();
         const handled = await handleDeterministicCommand(text, from, state, rawPushName);
         logStep('handleDeterministicCommand', deterministicStart);
         if (handled) {
             const summary = buildDeterministicSyncMessage(text, state);
-            chatwoot_1.chatwootService.syncMessage(from, userName, summary, 'outgoing', { source: 'bot' }).catch((err) => {
-                console.error(`[Chatwoot] async outgoing sync failed for ${from}:`, err?.message || err);
+            flushCapturedOutboundToChatwoot(from, userName, summary).catch((err) => {
+                console.error(`[Chatwoot] async deterministic flush failed for ${from}:`, err?.message || err);
             });
             logStep('total_handled_deterministic', totalStart);
             return;
         }
+        clearOutboundCapture(from);
         // Call LangChain agent
         const sessionId = `whatsapp_${from}`;
         const langchainStart = Date.now();
@@ -2315,6 +2458,7 @@ async function processMessageInternal(message, value) {
         logStep('total', totalStart);
     }
     catch (error) {
+        clearOutboundCapture(message?.from || '');
         console.error('[WhatsApp] Error processing message:', error);
     }
 }
