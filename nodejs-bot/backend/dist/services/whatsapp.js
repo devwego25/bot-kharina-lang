@@ -21,6 +21,7 @@ const chatwoot_1 = require("./chatwoot");
 const db_1 = require("./db");
 const langchain_1 = require("./langchain");
 const mcp_1 = require("./mcp");
+const reservationAdmin_1 = require("./reservationAdmin");
 const axios_1 = __importDefault(require("axios"));
 const socks_proxy_agent_1 = require("socks-proxy-agent");
 // In-memory state (consider moving to Redis for multi-instance)
@@ -162,6 +163,44 @@ function nextDayOfMonthDate(targetDay, fromDate = new Date()) {
     if (candidateNext.getDate() === targetDay)
         return candidateNext;
     return null;
+}
+function isValidAdminTimeInput(text) {
+    const normalized = normalizeTime(text);
+    if (!/^\d{2}:\d{2}$/.test(normalized))
+        return null;
+    const [hour, minute] = normalized.split(':').map(Number);
+    if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59)
+        return null;
+    return normalized;
+}
+function ensureAdminState(state) {
+    state.admin = state.admin || {};
+    return state.admin;
+}
+function clearAdminState(state) {
+    delete state.admin;
+}
+function buildReservationBlockCustomerMessage(block, unitName) {
+    const base = String(block.message || '').trim() || (0, reservationAdmin_1.buildDefaultBlockMessage)(block);
+    if (block.mode === 'suggest_alternative') {
+        return `${base}\n\nSe quiser, me diga outro horário ou outra unidade e eu sigo por aqui.`;
+    }
+    if (block.mode === 'handoff') {
+        const phone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+        if (phone) {
+            return `${base}\n\nSe preferir agilizar, você também pode falar direto com a unidade pelo telefone ${phone}.`;
+        }
+        return `${base}\n\nSe quiser, me diga outra unidade ou outro horário.`;
+    }
+    return `${base}\n\nSe quiser, me diga outro horário ou outra unidade.`;
+}
+async function maybeGetReservationBlock(state) {
+    const storeId = String(state.preferred_store_id || '').trim();
+    const date = normalizeIsoDate(String(state.reservation?.date_text || '').trim());
+    const time = normalizeTime(String(state.reservation?.time_text || '').trim());
+    if (!storeId || !date || !time)
+        return null;
+    return (0, reservationAdmin_1.findMatchingReservationBlock)({ storeId, date, time });
 }
 function toBrDate(isoOrBr) {
     const v = String(isoOrBr || '').trim();
@@ -1012,10 +1051,7 @@ async function beginAlterReservationFlow(from, state, selected, initialText) {
         missing.push('se terá crianças (e quantas)');
     if (missing.length === 0) {
         await sendWhatsAppText(from, `Perfeito! ✅ Atualizei a reserva ${selected.code} com os dados que você mandou.`);
-        await sendConfirmationMenu(from, state);
-        if (state.reservation)
-            state.reservation.awaiting_confirmation = true;
-        userStates.set(from, state);
+        await sendReservationConfirmationOrBlock(from, state);
         return;
     }
     await sendWhatsAppText(from, `Perfeito! Vamos alterar a reserva ${selected.code}. Me confirma só ${missing.join(' e ')}.`);
@@ -1073,6 +1109,16 @@ async function createReservationDeterministic(from, state) {
         return {
             ok: false,
             message: 'Faltaram alguns dados obrigatórios para concluir a reserva. Vamos revisar rapidinho pelo resumo. 🙏'
+        };
+    }
+    const block = await (0, reservationAdmin_1.findMatchingReservationBlock)({ storeId, date, time });
+    if (block) {
+        if (state.reservation)
+            state.reservation.awaiting_confirmation = false;
+        userStates.set(from, state);
+        return {
+            ok: false,
+            message: buildReservationBlockCustomerMessage(block, unitName)
         };
     }
     const mcpReady = await ensureReservasMcpReady();
@@ -1613,6 +1659,296 @@ async function sendDeliveryCitiesMenu(to) {
     };
     await sendInteractiveWithFallback(to, payload, 'send_delivery_cities_menu', 'De qual cidade? 1) Curitiba 2) Londrina 3) São Paulo');
 }
+async function sendAdminMainMenu(to, isMaster) {
+    const rows = [
+        { id: 'admin_menu_blocks', title: 'Bloqueios', description: 'Criar, listar e desativar regras' },
+        { id: 'admin_menu_list_blocks', title: 'Regras ativas', description: 'Ver bloqueios vigentes agora' },
+        ...(isMaster ? [{ id: 'admin_menu_admins', title: 'Administradores', description: 'Gerenciar acessos ao menu' }] : []),
+        { id: 'admin_menu_exit', title: 'Sair', description: 'Encerrar modo administrativo' }
+    ];
+    const fallbackText = isMaster
+        ? 'Menu admin: 1) Bloqueios 2) Regras ativas 3) Administradores 4) Sair'
+        : 'Menu admin: 1) Bloqueios 2) Regras ativas 3) Sair';
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Menu administrativo do bot. Escolha o que você quer gerenciar.' },
+            action: {
+                button: 'Abrir opções',
+                sections: [{ title: 'Administração', rows }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_main_menu', fallbackText);
+}
+async function sendAdminBlocksMenu(to) {
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Gerenciamento de bloqueios. Escolha uma ação.' },
+            action: {
+                button: 'Ver ações',
+                sections: [{
+                        title: 'Bloqueios',
+                        rows: [
+                            { id: 'admin_block_new', title: 'Criar bloqueio', description: 'Cadastrar nova regra de restrição' },
+                            { id: 'admin_block_list', title: 'Listar bloqueios', description: 'Ver regras ativas' },
+                            { id: 'admin_block_disable_menu', title: 'Desativar bloqueio', description: 'Encerrar regra existente' },
+                            { id: 'admin_menu_back_main', title: 'Voltar', description: 'Retornar ao menu principal' }
+                        ]
+                    }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_blocks_menu', 'Bloqueios: 1) Criar 2) Listar 3) Desativar 4) Voltar');
+}
+async function sendAdminStoreMenu(to) {
+    const rows = Object.entries(UNIT_CONFIG).map(([id, unit]) => ({
+        id: `admin_block_store_${id}`,
+        title: unit.name,
+        description: 'Aplicar bloqueio nesta unidade'
+    }));
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Escolha a unidade para o bloqueio.' },
+            action: {
+                button: 'Ver unidades',
+                sections: [{ title: 'Unidades', rows }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_store_menu', 'Escolha a unidade do bloqueio.');
+}
+async function sendAdminWeekdayMenu(to) {
+    const rows = [
+        { id: 'admin_block_day_all', title: 'Todos os dias', description: 'Vale para qualquer dia da semana' },
+        { id: 'admin_block_day_1', title: 'Segunda', description: 'Somente segunda-feira' },
+        { id: 'admin_block_day_2', title: 'Terça', description: 'Somente terça-feira' },
+        { id: 'admin_block_day_3', title: 'Quarta', description: 'Somente quarta-feira' },
+        { id: 'admin_block_day_4', title: 'Quinta', description: 'Somente quinta-feira' },
+        { id: 'admin_block_day_5', title: 'Sexta', description: 'Somente sexta-feira' },
+        { id: 'admin_block_day_6', title: 'Sábado', description: 'Somente sábado' },
+        { id: 'admin_block_day_0', title: 'Domingo', description: 'Somente domingo' }
+    ];
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Agora escolha em qual dia esse bloqueio deve valer.' },
+            action: {
+                button: 'Escolher dia',
+                sections: [{ title: 'Dias', rows }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_weekday_menu', 'Escolha o dia do bloqueio.');
+}
+async function sendAdminModeMenu(to) {
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: 'Como o bot deve agir quando a reserva cair nesse bloqueio?' },
+            action: {
+                buttons: [
+                    { type: 'reply', reply: { id: 'admin_block_mode_deny', title: 'Bloquear' } },
+                    { type: 'reply', reply: { id: 'admin_block_mode_suggest', title: 'Sugerir outro' } },
+                    { type: 'reply', reply: { id: 'admin_block_mode_handoff', title: 'Encaminhar' } }
+                ]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_mode_menu', 'Modo: bloquear, sugerir outro horário ou encaminhar para a equipe.');
+}
+async function sendAdminBlockConfirmMenu(to, draft) {
+    const summary = [
+        'Confirma a criação deste bloqueio?',
+        `• Unidade: ${draft.store_name || 'N/A'}`,
+        `• Dia: ${(0, reservationAdmin_1.weekdayLabel)(draft.weekday ?? null)}`,
+        `• Faixa: ${draft.start_time || 'N/A'} às ${draft.end_time || 'N/A'}`,
+        `• Ação: ${draft.mode ? (0, reservationAdmin_1.blockModeLabel)(draft.mode) : 'N/A'}`
+    ].join('\n');
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: summary },
+            action: {
+                buttons: [
+                    { type: 'reply', reply: { id: 'admin_block_save', title: 'Salvar' } },
+                    { type: 'reply', reply: { id: 'admin_block_cancel', title: 'Cancelar' } }
+                ]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_block_confirm_menu', summary);
+}
+async function sendAdminAdminsMenu(to) {
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Gerenciamento de administradores. Escolha uma ação.' },
+            action: {
+                button: 'Ver ações',
+                sections: [{
+                        title: 'Administradores',
+                        rows: [
+                            { id: 'admin_admin_add', title: 'Adicionar admin', description: 'Cadastrar novo acesso' },
+                            { id: 'admin_admin_list', title: 'Listar admins', description: 'Ver acessos ativos' },
+                            { id: 'admin_admin_remove_menu', title: 'Remover admin', description: 'Desativar acesso existente' },
+                            { id: 'admin_menu_back_main', title: 'Voltar', description: 'Retornar ao menu principal' }
+                        ]
+                    }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_admins_menu', 'Administradores: 1) Adicionar 2) Listar 3) Remover 4) Voltar');
+}
+async function sendAdminRoleMenu(to, phone) {
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: `Qual perfil você quer dar para ${phone}?` },
+            action: {
+                buttons: [
+                    { type: 'reply', reply: { id: 'admin_admin_role_admin', title: 'Admin' } },
+                    { type: 'reply', reply: { id: 'admin_admin_role_master', title: 'Master' } },
+                    { type: 'reply', reply: { id: 'admin_admin_role_cancel', title: 'Cancelar' } }
+                ]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_role_menu', `Escolha o perfil para ${phone}: admin ou master.`);
+}
+async function sendAdminRemoveAdminMenu(to, currentPhone) {
+    const admins = await (0, reservationAdmin_1.listAdminUsers)();
+    const rows = admins
+        .filter((admin) => admin.phone !== (0, reservationAdmin_1.normalizeAdminPhone)(currentPhone))
+        .slice(0, 10)
+        .map((admin) => ({
+        id: `admin_admin_remove_pick_${admin.phone}`,
+        title: admin.phone,
+        description: admin.role === 'master' ? 'Master' : 'Admin'
+    }));
+    if (rows.length === 0) {
+        await sendWhatsAppText(to, 'Não encontrei outros administradores ativos para remover.');
+        return;
+    }
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Escolha qual administrador você quer remover.' },
+            action: {
+                button: 'Ver admins',
+                sections: [{ title: 'Admins ativos', rows }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_remove_admin_menu', 'Escolha o administrador que deve ser removido.');
+}
+async function sendAdminRemoveConfirmMenu(to, phone) {
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: `Confirma remover o acesso administrativo do número ${phone}?` },
+            action: {
+                buttons: [
+                    { type: 'reply', reply: { id: 'admin_admin_remove_confirm', title: 'Confirmar' } },
+                    { type: 'reply', reply: { id: 'admin_admin_remove_cancel', title: 'Cancelar' } }
+                ]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_remove_confirm_menu', `Confirma remover o admin ${phone}?`);
+}
+async function sendAdminDisableBlockMenu(to) {
+    const blocks = await (0, reservationAdmin_1.listReservationBlocks)(true, 10);
+    if (blocks.length === 0) {
+        await sendWhatsAppText(to, 'Não há bloqueios ativos no momento.');
+        return;
+    }
+    const rows = blocks.map((block) => ({
+        id: `admin_block_disable_pick_${block.id}`,
+        title: `${block.store_name} ${block.start_time}-${block.end_time}`.slice(0, 24),
+        description: `${(0, reservationAdmin_1.weekdayLabel)(block.weekday)} | ${(0, reservationAdmin_1.blockModeLabel)(block.mode)}`.slice(0, 72)
+    }));
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Escolha o bloqueio que deve ser desativado.' },
+            action: {
+                button: 'Ver bloqueios',
+                sections: [{ title: 'Bloqueios ativos', rows }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_disable_block_menu', 'Escolha o bloqueio que deve ser desativado.');
+}
+async function sendAdminDisableBlockConfirmMenu(to, block) {
+    const summary = (0, reservationAdmin_1.describeReservationBlock)(block);
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: `Confirma desativar este bloqueio?\n\n${summary}` },
+            action: {
+                buttons: [
+                    { type: 'reply', reply: { id: 'admin_block_disable_confirm', title: 'Confirmar' } },
+                    { type: 'reply', reply: { id: 'admin_block_disable_cancel', title: 'Cancelar' } }
+                ]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_disable_block_confirm_menu', `Confirma desativar o bloqueio ${summary}?`);
+}
+async function sendReservationConfirmationOrBlock(to, state) {
+    const block = await maybeGetReservationBlock(state);
+    if (!block) {
+        await sendConfirmationMenu(to, state);
+        if (state.reservation)
+            state.reservation.awaiting_confirmation = true;
+        userStates.set(to, state);
+        return true;
+    }
+    if (state.reservation)
+        state.reservation.awaiting_confirmation = false;
+    userStates.set(to, state);
+    await sendWhatsAppText(to, buildReservationBlockCustomerMessage(block, state.preferred_unit_name));
+    return false;
+}
 // ============ Command Handlers ============
 function isInActiveFlow(state) {
     if (!state)
@@ -1626,7 +1962,396 @@ function isInActiveFlow(state) {
     }
     return false;
 }
+async function sendAdminBlockList(to) {
+    const blocks = await (0, reservationAdmin_1.listReservationBlocks)(true, 50);
+    if (blocks.length === 0) {
+        await sendWhatsAppText(to, 'Não há bloqueios ativos no momento.');
+        return;
+    }
+    const lines = ['Bloqueios ativos:'];
+    for (const block of blocks) {
+        lines.push(`- ${(0, reservationAdmin_1.describeReservationBlock)(block)}`);
+    }
+    await sendWhatsAppText(to, lines.join('\n'));
+}
+async function sendAdminUserList(to) {
+    const admins = await (0, reservationAdmin_1.listAdminUsers)();
+    if (admins.length === 0) {
+        await sendWhatsAppText(to, 'Não há administradores ativos cadastrados.');
+        return;
+    }
+    const lines = ['Administradores ativos:'];
+    for (const admin of admins) {
+        lines.push(`- ${admin.phone} | ${admin.role === 'master' ? 'Master' : 'Admin'}`);
+    }
+    await sendWhatsAppText(to, lines.join('\n'));
+}
+async function handleAdminCommand(text, from, state) {
+    const raw = String(text || '').trim();
+    const normalized = raw.toLowerCase();
+    const adminState = state.admin;
+    const looksLikeAdmin = normalized === '/admin' || normalized.startsWith('admin_') || !!adminState?.step;
+    if (!looksLikeAdmin)
+        return false;
+    const hasAdmins = await (0, reservationAdmin_1.hasAnyAdminConfigured)();
+    if (!hasAdmins) {
+        if (normalized === '/admin') {
+            await sendWhatsAppText(from, 'O acesso administrativo ainda não foi configurado. Defina o(s) número(s) master em `ADMIN_MASTER_PHONES` ou no config `admin_master_phones`.');
+        }
+        return true;
+    }
+    const adminUser = await (0, reservationAdmin_1.getAdminUser)(from);
+    if (!adminUser) {
+        if (normalized === '/admin') {
+            await sendWhatsAppText(from, 'Este número não tem acesso ao menu administrativo.');
+        }
+        return true;
+    }
+    const isMaster = adminUser.role === 'master';
+    const currentAdminState = ensureAdminState(state);
+    if (normalized === '/admin') {
+        currentAdminState.step = 'main';
+        currentAdminState.draft_block = undefined;
+        currentAdminState.pending_admin_phone = undefined;
+        currentAdminState.pending_disable_block_id = undefined;
+        currentAdminState.pending_remove_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendAdminMainMenu(from, isMaster);
+        return true;
+    }
+    if (normalized === 'admin_menu_exit') {
+        clearAdminState(state);
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Modo administrativo encerrado.');
+        return true;
+    }
+    if (normalized === 'admin_menu_back_main') {
+        currentAdminState.step = 'main';
+        currentAdminState.draft_block = undefined;
+        currentAdminState.pending_admin_phone = undefined;
+        currentAdminState.pending_disable_block_id = undefined;
+        currentAdminState.pending_remove_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendAdminMainMenu(from, isMaster);
+        return true;
+    }
+    if (normalized === 'admin_menu_blocks') {
+        currentAdminState.step = 'blocks';
+        currentAdminState.draft_block = undefined;
+        userStates.set(from, state);
+        await sendAdminBlocksMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_menu_list_blocks' || normalized === 'admin_block_list') {
+        await sendAdminBlockList(from);
+        if (currentAdminState.step !== 'main') {
+            await sendAdminBlocksMenu(from);
+        }
+        else {
+            await sendAdminMainMenu(from, isMaster);
+        }
+        return true;
+    }
+    if (normalized === 'admin_menu_admins') {
+        if (!isMaster) {
+            await sendWhatsAppText(from, 'Apenas administradores master podem gerenciar outros acessos.');
+            await sendAdminMainMenu(from, isMaster);
+            return true;
+        }
+        currentAdminState.step = 'admins';
+        userStates.set(from, state);
+        await sendAdminAdminsMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_block_new') {
+        currentAdminState.step = 'block_pick_store';
+        currentAdminState.draft_block = {};
+        userStates.set(from, state);
+        await sendAdminStoreMenu(from);
+        return true;
+    }
+    if (normalized.startsWith('admin_block_store_')) {
+        const unitId = normalized.replace('admin_block_store_', '').trim();
+        const unit = UNIT_CONFIG[unitId];
+        if (!unit) {
+            await sendWhatsAppText(from, 'Não reconheci essa unidade. Vou abrir a lista novamente.');
+            await sendAdminStoreMenu(from);
+            return true;
+        }
+        currentAdminState.step = 'block_pick_day';
+        currentAdminState.draft_block = {
+            ...(currentAdminState.draft_block || {}),
+            store_id: unit.storeId,
+            store_name: unit.name
+        };
+        userStates.set(from, state);
+        await sendAdminWeekdayMenu(from);
+        return true;
+    }
+    if (normalized.startsWith('admin_block_day_')) {
+        const rawDay = normalized.replace('admin_block_day_', '').trim();
+        currentAdminState.step = 'block_wait_start_time';
+        currentAdminState.draft_block = {
+            ...(currentAdminState.draft_block || {}),
+            weekday: rawDay === 'all' ? null : Number(rawDay)
+        };
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Me envie o horário inicial do bloqueio no formato HH:MM. Ex.: 19:00');
+        return true;
+    }
+    if (currentAdminState.step === 'block_wait_start_time') {
+        const startTime = isValidAdminTimeInput(raw);
+        if (!startTime) {
+            await sendWhatsAppText(from, 'Horário inválido. Me envie no formato HH:MM. Ex.: 19:00');
+            return true;
+        }
+        currentAdminState.step = 'block_wait_end_time';
+        currentAdminState.draft_block = {
+            ...(currentAdminState.draft_block || {}),
+            start_time: startTime
+        };
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Agora me envie o horário final do bloqueio no formato HH:MM. Ex.: 21:30');
+        return true;
+    }
+    if (currentAdminState.step === 'block_wait_end_time') {
+        const endTime = isValidAdminTimeInput(raw);
+        const startTime = currentAdminState.draft_block?.start_time;
+        if (!endTime || !startTime || endTime <= startTime) {
+            await sendWhatsAppText(from, 'Horário final inválido. Ele precisa ser maior que o horário inicial. Ex.: 21:30');
+            return true;
+        }
+        currentAdminState.step = 'block_pick_mode';
+        currentAdminState.draft_block = {
+            ...(currentAdminState.draft_block || {}),
+            end_time: endTime
+        };
+        userStates.set(from, state);
+        await sendAdminModeMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_block_mode_deny' || normalized === 'admin_block_mode_suggest' || normalized === 'admin_block_mode_handoff') {
+        const mode = normalized === 'admin_block_mode_suggest'
+            ? 'suggest_alternative'
+            : normalized === 'admin_block_mode_handoff'
+                ? 'handoff'
+                : 'deny';
+        currentAdminState.step = 'block_confirm';
+        currentAdminState.draft_block = {
+            ...(currentAdminState.draft_block || {}),
+            mode
+        };
+        userStates.set(from, state);
+        await sendAdminBlockConfirmMenu(from, currentAdminState.draft_block || {});
+        return true;
+    }
+    if (normalized === 'admin_block_cancel') {
+        currentAdminState.step = 'blocks';
+        currentAdminState.draft_block = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Criação do bloqueio cancelada.');
+        await sendAdminBlocksMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_block_save') {
+        const draft = currentAdminState.draft_block || {};
+        if (!draft.store_id || !draft.store_name || draft.start_time === undefined || !draft.end_time || !draft.mode) {
+            await sendWhatsAppText(from, 'Faltaram dados do bloqueio. Vou reiniciar esse cadastro.');
+            currentAdminState.step = 'blocks';
+            currentAdminState.draft_block = undefined;
+            userStates.set(from, state);
+            await sendAdminBlocksMenu(from);
+            return true;
+        }
+        const block = await (0, reservationAdmin_1.createReservationBlock)({
+            storeId: draft.store_id,
+            storeName: draft.store_name,
+            weekday: draft.weekday ?? null,
+            startTime: draft.start_time,
+            endTime: draft.end_time,
+            mode: draft.mode,
+            message: (0, reservationAdmin_1.buildDefaultBlockMessage)({
+                store_name: draft.store_name,
+                weekday: draft.weekday ?? null,
+                start_time: draft.start_time,
+                end_time: draft.end_time,
+                mode: draft.mode
+            }),
+            createdBy: from
+        });
+        currentAdminState.step = 'blocks';
+        currentAdminState.draft_block = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, `Bloqueio criado com sucesso.\n${(0, reservationAdmin_1.describeReservationBlock)(block)}`);
+        await sendAdminBlocksMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_block_disable_menu') {
+        currentAdminState.step = 'block_disable_pick';
+        userStates.set(from, state);
+        await sendAdminDisableBlockMenu(from);
+        return true;
+    }
+    if (normalized.startsWith('admin_block_disable_pick_')) {
+        const id = Number(normalized.replace('admin_block_disable_pick_', '').trim());
+        const block = Number.isFinite(id) ? await (0, reservationAdmin_1.getReservationBlock)(id) : null;
+        if (!block || !block.active) {
+            await sendWhatsAppText(from, 'Esse bloqueio não está mais disponível. Vou abrir a lista novamente.');
+            await sendAdminDisableBlockMenu(from);
+            return true;
+        }
+        currentAdminState.step = 'block_disable_confirm';
+        currentAdminState.pending_disable_block_id = id;
+        userStates.set(from, state);
+        await sendAdminDisableBlockConfirmMenu(from, block);
+        return true;
+    }
+    if (normalized === 'admin_block_disable_confirm') {
+        const blockId = Number(currentAdminState.pending_disable_block_id || 0);
+        if (!blockId) {
+            await sendWhatsAppText(from, 'Não encontrei qual bloqueio deveria ser desativado. Vou voltar ao menu.');
+            currentAdminState.step = 'blocks';
+            userStates.set(from, state);
+            await sendAdminBlocksMenu(from);
+            return true;
+        }
+        await (0, reservationAdmin_1.deactivateReservationBlock)(blockId, from);
+        currentAdminState.step = 'blocks';
+        currentAdminState.pending_disable_block_id = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, `Bloqueio #${blockId} desativado com sucesso.`);
+        await sendAdminBlocksMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_block_disable_cancel') {
+        currentAdminState.step = 'blocks';
+        currentAdminState.pending_disable_block_id = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Desativação cancelada.');
+        await sendAdminBlocksMenu(from);
+        return true;
+    }
+    if (!isMaster) {
+        if (adminState?.step) {
+            await sendAdminMainMenu(from, false);
+            return true;
+        }
+        return false;
+    }
+    if (normalized === 'admin_admin_list') {
+        await sendAdminUserList(from);
+        await sendAdminAdminsMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_admin_add') {
+        currentAdminState.step = 'admin_wait_phone';
+        currentAdminState.pending_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Me envie o número que deve ganhar acesso administrativo, com DDD. Ex.: +5541999999999');
+        return true;
+    }
+    if (currentAdminState.step === 'admin_wait_phone') {
+        const extracted = extractPhoneCandidate(raw) || (0, reservationAdmin_1.normalizeAdminPhone)(raw);
+        if (!extracted || extracted.length < 12) {
+            await sendWhatsAppText(from, 'Número inválido. Envie com DDD e, de preferência, com +55. Ex.: +5541999999999');
+            return true;
+        }
+        currentAdminState.step = 'admin_pick_role';
+        currentAdminState.pending_admin_phone = extracted;
+        userStates.set(from, state);
+        await sendAdminRoleMenu(from, extracted);
+        return true;
+    }
+    if (normalized === 'admin_admin_role_cancel') {
+        currentAdminState.step = 'admins';
+        currentAdminState.pending_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Cadastro de admin cancelado.');
+        await sendAdminAdminsMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_admin_role_admin' || normalized === 'admin_admin_role_master') {
+        const targetPhone = String(currentAdminState.pending_admin_phone || '').trim();
+        if (!targetPhone) {
+            await sendWhatsAppText(from, 'Não encontrei o número pendente desse cadastro. Vou voltar ao menu.');
+            currentAdminState.step = 'admins';
+            userStates.set(from, state);
+            await sendAdminAdminsMenu(from);
+            return true;
+        }
+        const role = normalized === 'admin_admin_role_master' ? 'master' : 'admin';
+        const saved = await (0, reservationAdmin_1.addOrUpdateAdminUser)(targetPhone, role, from);
+        currentAdminState.step = 'admins';
+        currentAdminState.pending_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, `Acesso salvo para ${saved.phone} como ${saved.role === 'master' ? 'master' : 'admin'}.`);
+        await sendAdminAdminsMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_admin_remove_menu') {
+        currentAdminState.step = 'admin_remove_pick';
+        userStates.set(from, state);
+        await sendAdminRemoveAdminMenu(from, from);
+        return true;
+    }
+    if (normalized.startsWith('admin_admin_remove_pick_')) {
+        const phone = normalized.replace('admin_admin_remove_pick_', '').trim();
+        currentAdminState.step = 'admin_remove_confirm';
+        currentAdminState.pending_remove_admin_phone = phone;
+        userStates.set(from, state);
+        await sendAdminRemoveConfirmMenu(from, phone);
+        return true;
+    }
+    if (normalized === 'admin_admin_remove_cancel') {
+        currentAdminState.step = 'admins';
+        currentAdminState.pending_remove_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Remoção cancelada.');
+        await sendAdminAdminsMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_admin_remove_confirm') {
+        const phone = String(currentAdminState.pending_remove_admin_phone || '').trim();
+        if (!phone) {
+            await sendWhatsAppText(from, 'Não encontrei qual admin deveria ser removido. Vou voltar ao menu.');
+            currentAdminState.step = 'admins';
+            userStates.set(from, state);
+            await sendAdminAdminsMenu(from);
+            return true;
+        }
+        try {
+            await (0, reservationAdmin_1.deactivateAdminUser)(phone, from);
+            await sendWhatsAppText(from, `Acesso removido do número ${phone}.`);
+        }
+        catch (err) {
+            const reason = String(err?.message || err || '');
+            if (reason === 'cannot_remove_self') {
+                await sendWhatsAppText(from, 'Você não pode remover o seu próprio acesso por este menu.');
+            }
+            else if (reason === 'cannot_remove_last_master') {
+                await sendWhatsAppText(from, 'Não posso remover o último administrador master.');
+            }
+            else {
+                await sendWhatsAppText(from, 'Não consegui remover esse administrador agora.');
+            }
+        }
+        currentAdminState.step = 'admins';
+        currentAdminState.pending_remove_admin_phone = undefined;
+        userStates.set(from, state);
+        await sendAdminAdminsMenu(from);
+        return true;
+    }
+    if (currentAdminState.step) {
+        await sendWhatsAppText(from, 'Não reconheci essa opção no fluxo administrativo. Vou te mostrar o menu novamente.');
+        await sendAdminMainMenu(from, isMaster);
+        return true;
+    }
+    return false;
+}
 async function handleDeterministicCommand(text, from, state, profileName) {
+    if (await handleAdminCommand(text, from, state)) {
+        return true;
+    }
     const normalized = text.trim().toLowerCase();
     const normalizedNoAccent = normalized
         .normalize('NFD')
@@ -1658,7 +2383,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
     if (state.reservation?.awaiting_confirmation && text !== 'confirm_reserva_sim' && text !== 'confirm_reserva_nao') {
         if (isGreeting || isThanks || isGenericAck || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
             await sendWhatsAppText(from, 'Estamos quase lá 😊 Para concluir, confirme os dados da reserva no botão abaixo.');
-            await sendConfirmationMenu(from, state);
+            await sendReservationConfirmationOrBlock(from, state);
             return true;
         }
     }
@@ -2018,9 +2743,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
             userStates.set(from, state);
             if (hasCompleteReservationData(state.reservation)) {
                 await sendWhatsAppText(from, `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅`);
-                await sendConfirmationMenu(from, state);
-                state.reservation.awaiting_confirmation = true;
-                userStates.set(from, state);
+                await sendReservationConfirmationOrBlock(from, state);
                 return true;
             }
             const missing = getMissingReservationFields(state.reservation);
@@ -2060,7 +2783,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         if (!done.ok) {
             const suggestWait = done.message.toLowerCase().includes('alguns minutos');
             if (!suggestWait) {
-                await sendConfirmationMenu(from, state);
+                await sendReservationConfirmationOrBlock(from, state);
             }
         }
         return true;
@@ -2130,9 +2853,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
                 return true;
             }
             userStates.set(from, state);
-            await sendConfirmationMenu(from, state);
-            state.reservation.awaiting_confirmation = true;
-            userStates.set(from, state);
+            await sendReservationConfirmationOrBlock(from, state);
             return true;
         }
         // Anti-loop: if all reservation data is already present, keep the user on confirmation step
@@ -2142,7 +2863,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
                 state.reservation.awaiting_confirmation = true;
             userStates.set(from, state);
             await sendWhatsAppText(from, 'Estamos quase lá ✅ Se estiver tudo certo no resumo, toque em *Sim, tudo certo!* para eu tentar concluir agora.');
-            await sendConfirmationMenu(from, state);
+            await sendReservationConfirmationOrBlock(from, state);
             return true;
         }
         // Stay deterministic while in active flow; avoid falling back to LLM on ambiguous turns.
@@ -2420,11 +3141,7 @@ async function processMessageInternal(message, value) {
             }
             switch (result.ui_action.type) {
                 case 'show_confirmation_menu':
-                    await sendConfirmationMenu(from, state);
-                    if (state.reservation) {
-                        state.reservation.awaiting_confirmation = true;
-                        userStates.set(from, state);
-                    }
+                    await sendReservationConfirmationOrBlock(from, state);
                     break;
                 case 'show_main_menu':
                     await sendMainMenu(from, !!state.has_interacted);

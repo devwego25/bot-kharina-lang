@@ -12,6 +12,7 @@ const config_routes_1 = __importDefault(require("./routes/config.routes"));
 const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const whatsapp_routes_1 = __importDefault(require("./routes/whatsapp.routes"));
 const chatwoot_webhook_routes_1 = __importDefault(require("./routes/chatwoot.webhook.routes"));
+const reservationAdmin_1 = require("./services/reservationAdmin");
 const seed_1 = require("./services/seed");
 const app = (0, express_1.default)();
 function renderLegalPage(title, contentHtml) {
@@ -42,7 +43,12 @@ function renderLegalPage(title, contentHtml) {
 </html>`;
 }
 // ─── Initialize DB ──────────────────────────────────────────────────────
-db_1.db.init().then(() => (0, seed_1.seedConfigs)());
+db_1.db.init()
+    .then(() => (0, seed_1.seedConfigs)())
+    .then(() => (0, reservationAdmin_1.ensureConfiguredMasterAdmins)())
+    .catch((err) => {
+    console.error('[Init] startup init failed:', err?.message || err);
+});
 // ─── Express Setup ──────────────────────────────────────────────────────
 app.use(express_1.default.json({ limit: '10mb' }));
 app.use(express_1.default.urlencoded({ extended: true }));

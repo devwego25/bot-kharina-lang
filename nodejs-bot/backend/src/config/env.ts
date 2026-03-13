@@ -17,6 +17,12 @@ const defaultModel = normalizeModelName(process.env.OPENAI_MODEL, 'gpt-4o-mini')
 
 export const config = {
     port: process.env.PORT || 3000,
+    admin: {
+        masterPhones: String(process.env.ADMIN_MASTER_PHONES || '')
+            .split(',')
+            .map((value) => value.replace(/\D/g, '').trim())
+            .filter(Boolean),
+    },
     whatsapp: {
         token: process.env.WHATSAPP_TOKEN,
         phoneId: process.env.WHATSAPP_PHONE_ID,
