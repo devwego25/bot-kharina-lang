@@ -21,6 +21,7 @@ const chatwoot_1 = require("./chatwoot");
 const db_1 = require("./db");
 const langchain_1 = require("./langchain");
 const mcp_1 = require("./mcp");
+const reservasAdminApi_1 = require("./reservasAdminApi");
 const reservationAdmin_1 = require("./reservationAdmin");
 const axios_1 = __importDefault(require("axios"));
 const socks_proxy_agent_1 = require("socks-proxy-agent");
@@ -43,6 +44,7 @@ const BOT_ACTIVE_TIMEOUT_MS = 700;
 const STORES_HOURS_CACHE_TTL_MS = 10 * 60 * 1000;
 const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
 const MIN_RESERVATION_LEAD_MINUTES = 120;
+const ADMIN_RESERVATION_PAGE_SIZE = 6;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
@@ -181,6 +183,14 @@ function ensureAdminState(state) {
 function clearAdminState(state) {
     delete state.admin;
 }
+function clearAdminReservationState(state) {
+    if (!state.admin)
+        return;
+    delete state.admin.reservation_view;
+    delete state.admin.reservation_store_id;
+    delete state.admin.reservation_store_name;
+    delete state.admin.reservation_page;
+}
 function buildReservationBlockCustomerMessage(block, unitName, requestedDate, requestedTime) {
     const unitLabel = unitName || block.store_name || 'essa unidade';
     const base = `A reserva para a unidade ${unitLabel} nesse dia e horário está bloqueada, então o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
@@ -238,6 +248,9 @@ function toBrDate(isoOrBr) {
     if (iso)
         return `${iso[3]}/${iso[2]}/${iso[1]}`;
     return v;
+}
+function getSaoPauloTodayIso() {
+    return new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 }
 function normalizeIntentText(text) {
     return String(text || '')
@@ -1708,14 +1721,15 @@ async function sendDeliveryCitiesMenu(to) {
 }
 async function sendAdminMainMenu(to, isMaster) {
     const rows = [
+        { id: 'admin_menu_reservations', title: 'Reservas', description: 'Consultar totais e listagens por unidade' },
         { id: 'admin_menu_blocks', title: 'Bloqueios', description: 'Criar, listar e desativar regras' },
         { id: 'admin_menu_list_blocks', title: 'Regras ativas', description: 'Ver bloqueios vigentes agora' },
         ...(isMaster ? [{ id: 'admin_menu_admins', title: 'Administradores', description: 'Gerenciar acessos ao menu' }] : []),
         { id: 'admin_menu_exit', title: 'Sair', description: 'Encerrar modo administrativo' }
     ];
     const fallbackText = isMaster
-        ? 'Menu admin: 1) Bloqueios 2) Regras ativas 3) Administradores 4) Sair'
-        : 'Menu admin: 1) Bloqueios 2) Regras ativas 3) Sair';
+        ? 'Menu admin: 1) Reservas 2) Bloqueios 3) Regras ativas 4) Administradores 5) Sair'
+        : 'Menu admin: 1) Reservas 2) Bloqueios 3) Regras ativas 4) Sair';
     const payload = {
         messaging_product: 'whatsapp',
         to,
@@ -1754,6 +1768,142 @@ async function sendAdminBlocksMenu(to) {
         }
     };
     await sendInteractiveWithFallback(to, payload, 'send_admin_blocks_menu', 'Bloqueios: 1) Criar 2) Listar 3) Desativar 4) Voltar');
+}
+async function sendAdminReservationsMenu(to) {
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: 'Consultas operacionais de reservas por unidade.' },
+            action: {
+                button: 'Ver ações',
+                sections: [{
+                        title: 'Reservas',
+                        rows: [
+                            { id: 'admin_res_summary', title: 'Resumo da unidade', description: 'Confirmadas hoje e total confirmadas' },
+                            { id: 'admin_res_list_today', title: 'Listar reservas hoje', description: 'Reservas confirmadas com paginação' },
+                            { id: 'admin_menu_back_main', title: 'Voltar', description: 'Retornar ao menu principal' }
+                        ]
+                    }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_reservations_menu', 'Reservas: 1) Resumo da unidade 2) Listar reservas hoje 3) Voltar');
+}
+async function sendAdminReservationStoreMenu(to, view) {
+    const rows = Object.entries(UNIT_CONFIG).map(([id, unit]) => ({
+        id: `admin_res_store_${id}`,
+        title: unit.name,
+        description: view === 'summary' ? 'Ver resumo da unidade' : 'Ver reservas confirmadas de hoje'
+    }));
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'list',
+            body: { text: view === 'summary' ? 'Escolha a unidade para consultar o resumo.' : 'Escolha a unidade para listar as reservas de hoje.' },
+            action: {
+                button: 'Ver unidades',
+                sections: [{ title: 'Unidades', rows }]
+            }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, view === 'summary' ? 'send_admin_res_summary_store_menu' : 'send_admin_res_list_store_menu', 'Escolha a unidade da consulta.');
+}
+async function sendAdminReservationSummary(to, storeId, storeName) {
+    if (!reservasAdminApi_1.reservasAdminApiService.isConfigured()) {
+        await sendWhatsAppText(to, 'A integração da API de reservas ainda não foi configurada no bot.');
+        return;
+    }
+    const today = getSaoPauloTodayIso();
+    const [stats, todayList] = await Promise.all([
+        reservasAdminApi_1.reservasAdminApiService.getReservationStats(storeId),
+        reservasAdminApi_1.reservasAdminApiService.listReservations({
+            storeId,
+            startDate: today,
+            endDate: today,
+            status: 'confirmed',
+            page: 1,
+            limit: 1
+        })
+    ]);
+    const lines = [
+        `Resumo de reservas confirmadas`,
+        `• Unidade: ${storeName}`,
+        `• Hoje (${toBrDate(today)}): ${todayList.meta.total}`,
+        `• Total confirmadas: ${stats.confirmedReservations}`
+    ];
+    await sendWhatsAppText(to, lines.join('\n'));
+}
+async function sendAdminReservationListPage(to, state) {
+    const admin = ensureAdminState(state);
+    const storeId = String(admin.reservation_store_id || '').trim();
+    const storeName = String(admin.reservation_store_name || '').trim() || 'Unidade';
+    const page = Math.max(1, Number(admin.reservation_page || 1));
+    if (!storeId) {
+        await sendWhatsAppText(to, 'Não encontrei a unidade da consulta. Vou voltar ao menu administrativo.');
+        admin.step = 'main';
+        clearAdminReservationState(state);
+        userStates.set(to, state);
+        await sendAdminMainMenu(to, (await (0, reservationAdmin_1.getAdminUser)(to))?.role === 'master');
+        return;
+    }
+    if (!reservasAdminApi_1.reservasAdminApiService.isConfigured()) {
+        await sendWhatsAppText(to, 'A integração da API de reservas ainda não foi configurada no bot.');
+        return;
+    }
+    const today = getSaoPauloTodayIso();
+    const response = await reservasAdminApi_1.reservasAdminApiService.listReservations({
+        storeId,
+        startDate: today,
+        endDate: today,
+        status: 'confirmed',
+        page,
+        limit: ADMIN_RESERVATION_PAGE_SIZE
+    });
+    const lines = [
+        `Reservas confirmadas de hoje`,
+        `• Unidade: ${storeName}`,
+        `• Data: ${toBrDate(today)}`,
+        `• Página: ${response.meta.page}/${Math.max(1, response.meta.totalPages)}`,
+        `• Total hoje: ${response.meta.total}`,
+        ''
+    ];
+    if (response.data.length === 0) {
+        lines.push('Nenhuma reserva confirmada para essa unidade hoje.');
+    }
+    else {
+        response.data.forEach((item, index) => {
+            const phone = item.customerPhone ? formatBrazilPhone(item.customerPhone) : 'Sem telefone';
+            const guests = Number(item.guests || 0);
+            const kids = Number(item.kids || 0);
+            const guestsLabel = kids > 0 ? `${guests} pessoas (${kids} crianças)` : `${guests} pessoas`;
+            lines.push(`${(response.meta.page - 1) * response.meta.limit + index + 1}. ${normalizeTime(item.time)} | ${String(item.customerName || 'Cliente').trim()} | ${guestsLabel} | ${phone}`);
+        });
+    }
+    await sendWhatsAppText(to, lines.join('\n'));
+    const buttons = [];
+    if (response.meta.hasPreviousPage) {
+        buttons.push({ type: 'reply', reply: { id: 'admin_res_list_prev', title: 'Anterior' } });
+    }
+    if (response.meta.hasNextPage) {
+        buttons.push({ type: 'reply', reply: { id: 'admin_res_list_next', title: 'Próxima' } });
+    }
+    buttons.push({ type: 'reply', reply: { id: 'admin_res_list_back', title: 'Voltar' } });
+    const payload = {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: {
+            type: 'button',
+            body: { text: `Navegação da lista de reservas de ${storeName}.` },
+            action: { buttons }
+        }
+    };
+    await sendInteractiveWithFallback(to, payload, 'send_admin_reservation_list_nav', response.meta.hasNextPage ? 'Digite "próxima" para ver mais reservas ou "voltar".' : 'Digite "voltar" para retornar ao menu de reservas.');
 }
 async function sendAdminStoreMenu(to) {
     const rows = Object.entries(UNIT_CONFIG).map(([id, unit]) => ({
@@ -2076,6 +2226,7 @@ async function handleAdminCommand(text, from, state) {
         currentAdminState.pending_admin_phone = undefined;
         currentAdminState.pending_disable_block_id = undefined;
         currentAdminState.pending_remove_admin_phone = undefined;
+        clearAdminReservationState(state);
         userStates.set(from, state);
         await sendAdminMainMenu(from, isMaster);
         return true;
@@ -2092,8 +2243,78 @@ async function handleAdminCommand(text, from, state) {
         currentAdminState.pending_admin_phone = undefined;
         currentAdminState.pending_disable_block_id = undefined;
         currentAdminState.pending_remove_admin_phone = undefined;
+        clearAdminReservationState(state);
         userStates.set(from, state);
         await sendAdminMainMenu(from, isMaster);
+        return true;
+    }
+    if (normalized === 'admin_menu_reservations') {
+        currentAdminState.step = 'reservations';
+        clearAdminReservationState(state);
+        userStates.set(from, state);
+        await sendAdminReservationsMenu(from);
+        return true;
+    }
+    if (normalized === 'admin_res_summary' || normalized === 'admin_res_list_today') {
+        currentAdminState.step = 'reservation_store_pick';
+        currentAdminState.reservation_view = normalized === 'admin_res_summary' ? 'summary' : 'list';
+        currentAdminState.reservation_store_id = undefined;
+        currentAdminState.reservation_store_name = undefined;
+        currentAdminState.reservation_page = undefined;
+        userStates.set(from, state);
+        await sendAdminReservationStoreMenu(from, currentAdminState.reservation_view);
+        return true;
+    }
+    if (normalized.startsWith('admin_res_store_')) {
+        const unitId = normalized.replace('admin_res_store_', '').trim();
+        const unit = UNIT_CONFIG[unitId];
+        if (!unit) {
+            await sendWhatsAppText(from, 'Não reconheci essa unidade. Vou abrir a lista novamente.');
+            await sendAdminReservationStoreMenu(from, currentAdminState.reservation_view || 'summary');
+            return true;
+        }
+        currentAdminState.reservation_store_id = unit.storeId;
+        currentAdminState.reservation_store_name = unit.name;
+        currentAdminState.reservation_page = 1;
+        userStates.set(from, state);
+        try {
+            if (currentAdminState.reservation_view === 'list') {
+                currentAdminState.step = 'reservation_list';
+                userStates.set(from, state);
+                await sendAdminReservationListPage(from, state);
+            }
+            else {
+                currentAdminState.step = 'reservations';
+                userStates.set(from, state);
+                await sendAdminReservationSummary(from, unit.storeId, unit.name);
+                await sendAdminReservationsMenu(from);
+            }
+        }
+        catch (err) {
+            console.error('[AdminReservations] store query failed:', err?.response?.data || err?.message || err);
+            await sendWhatsAppText(from, 'Não consegui consultar a API de reservas agora. Tente novamente em instantes.');
+        }
+        return true;
+    }
+    if (normalized === 'admin_res_list_next' || normalized === 'admin_res_list_prev') {
+        const currentPage = Math.max(1, Number(currentAdminState.reservation_page || 1));
+        currentAdminState.step = 'reservation_list';
+        currentAdminState.reservation_page = normalized === 'admin_res_list_next' ? currentPage + 1 : Math.max(1, currentPage - 1);
+        userStates.set(from, state);
+        try {
+            await sendAdminReservationListPage(from, state);
+        }
+        catch (err) {
+            console.error('[AdminReservations] pagination failed:', err?.response?.data || err?.message || err);
+            await sendWhatsAppText(from, 'Não consegui carregar a próxima página agora. Tente novamente em instantes.');
+        }
+        return true;
+    }
+    if (normalized === 'admin_res_list_back') {
+        currentAdminState.step = 'reservations';
+        clearAdminReservationState(state);
+        userStates.set(from, state);
+        await sendAdminReservationsMenu(from);
         return true;
     }
     if (normalized === 'admin_menu_blocks') {
