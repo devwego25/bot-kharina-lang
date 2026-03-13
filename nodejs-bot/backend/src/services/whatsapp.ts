@@ -127,6 +127,15 @@ const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
 const MIN_RESERVATION_LEAD_MINUTES = 120;
 const ADMIN_RESERVATION_PAGE_SIZE = 6;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
+const HAPPY_HOUR_INFO_TEXT = [
+  '*Happy Hour Kharina*',
+  '_De segunda a sexta-feira, das 16h às 20h._',
+  '*Exceto nos feriados.*',
+  '',
+  'O melhor Happy Hour, com *até 50% de desconto*.',
+  '',
+  'Se quiser, também posso te ajudar com cardápio, reserva ou delivery.'
+].join('\n');
 
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
@@ -3225,6 +3234,12 @@ async function handleDeterministicCommand(
   const isCorkageQuestion =
     /\b(rolha|vinho|bebida(?:s)?\s+de\s+casa|bebida\s+de\s+fora)\b/.test(normalizedNoAccent) &&
     /\b(pode|permitid|autoriz|levar|trazer|tem|custa|cobra|taxa)\b/.test(normalizedNoAccent);
+  const isHappyHourQuestion =
+    /\bhappy\s*hour\b/.test(normalizedNoAccent) ||
+    (
+      /\b(desconto|promoc[aã]o|promocoes|promo[cç][aã]o)\b/.test(normalizedNoAccent) &&
+      /\b(16h|20h|segunda|sexta|dias|horario|horarios)\b/.test(normalizedNoAccent)
+    );
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
@@ -3283,6 +3298,11 @@ async function handleDeterministicCommand(
       from,
       `Sim! 🍷 Trabalhamos com rolha liberada${unit}, sem custo. Pode trazer vinho ou bebida de casa sem taxa. 😊`
     );
+    return true;
+  }
+
+  if (isHappyHourQuestion) {
+    await sendWhatsAppText(from, HAPPY_HOUR_INFO_TEXT);
     return true;
   }
 
