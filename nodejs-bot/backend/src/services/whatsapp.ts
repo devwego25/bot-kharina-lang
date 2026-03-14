@@ -942,6 +942,58 @@ function toDigitsPhone(raw: string): string {
   return String(raw || '').replace(/\D/g, '');
 }
 
+function getPhoneLookupVariants(raw: string): string[] {
+  const digits = toDigitsPhone(raw);
+  if (!digits) return [];
+
+  const local = digits.startsWith('55') ? digits.slice(2) : digits;
+  if (local.length < 10) {
+    return Array.from(new Set([digits, local].filter(Boolean)));
+  }
+
+  const ddd = local.slice(0, 2);
+  const subscriber = local.slice(2);
+  const variants = new Set<string>();
+
+  const addVariant = (localNumber: string) => {
+    if (!localNumber) return;
+    variants.add(localNumber);
+    variants.add(`55${localNumber}`);
+  };
+
+  addVariant(local);
+
+  if (subscriber.length === 9 && subscriber.startsWith('9')) {
+    addVariant(`${ddd}${subscriber.slice(1)}`);
+  } else if (subscriber.length === 8) {
+    addVariant(`${ddd}9${subscriber}`);
+  }
+
+  return Array.from(variants);
+}
+
+async function queryReservationsByPhoneVariants(phoneRaw: string): Promise<any[]> {
+  const mcpReady = await ensureReservasMcpReady();
+  if (!mcpReady) return [];
+
+  for (const phone of getPhoneLookupVariants(phoneRaw)) {
+    try {
+      const result = await callReservasToolWithTimeout(
+        'query_reservations',
+        { clientPhone: phone },
+        { timeoutMs: 15000, retries: 1, retryDelayMs: 600 }
+      );
+      const payload = parseMcpToolText(result);
+      const all = extractReservationsList(payload);
+      if (all.length > 0) return all;
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] phone variant query failed:', phone, err?.message || err);
+    }
+  }
+
+  return [];
+}
+
 function parseMcpToolText(result: any): any {
   try {
     const text = result?.content?.[0]?.text;
@@ -1227,16 +1279,7 @@ async function callReservasToolWithTimeout(
 }
 
 async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservation[]> {
-  const phone = toDigitsPhone(phoneRaw);
-  const mcpReady = await ensureReservasMcpReady();
-  if (!mcpReady) return [];
-  const result = await callReservasToolWithTimeout(
-    'query_reservations',
-    { clientPhone: phone },
-    { timeoutMs: 15000, retries: 1, retryDelayMs: 600 }
-  );
-  const payload = parseMcpToolText(result);
-  const all = extractReservationsList(payload);
+  const all = await queryReservationsByPhoneVariants(phoneRaw);
   const mapped = all
     .filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'))
     .map((x: any) => ({
@@ -1337,29 +1380,37 @@ async function searchReservationsAdminFallback(phoneRaw: string): Promise<Active
 }
 
 async function findReservationMatchWithId(input: ReservationMatchInput): Promise<{ id?: string; code?: string; status?: string } | null> {
-  const verifyResult = await callReservasToolWithTimeout(
-    'query_reservations',
-    { clientPhone: input.phone },
-    { timeoutMs: 12000, retries: 0 }
-  );
-  const verifyPayload = parseMcpToolText(verifyResult);
-  const items = extractReservationsList(verifyPayload);
-  const matched = items.find((x: any) =>
-    normalizeIsoDate(x?.date) === input.date &&
-    normalizeTime(x?.time) === input.time &&
-    Number(x?.numberOfPeople || x?.people) === input.people &&
-    String(x?.storeId || '').toLowerCase() === String(input.storeId).toLowerCase() &&
-    !String(x?.status || '').toLowerCase().includes('cancel')
-  );
-  if (!matched) return null;
+  for (const phone of getPhoneLookupVariants(input.phone)) {
+    try {
+      const verifyResult = await callReservasToolWithTimeout(
+        'query_reservations',
+        { clientPhone: phone },
+        { timeoutMs: 12000, retries: 0 }
+      );
+      const verifyPayload = parseMcpToolText(verifyResult);
+      const items = extractReservationsList(verifyPayload);
+      const matched = items.find((x: any) =>
+        normalizeIsoDate(x?.date) === input.date &&
+        normalizeTime(x?.time) === input.time &&
+        Number(x?.numberOfPeople || x?.people) === input.people &&
+        String(x?.storeId || '').toLowerCase() === String(input.storeId).toLowerCase() &&
+        !String(x?.status || '').toLowerCase().includes('cancel')
+      );
+      if (!matched) continue;
 
-  const id = matched.reservationId || matched.id;
-  if (!id) return null;
-  return {
-    id,
-    code: matched.code || matched.reservationCode || matched.confirmationCode,
-    status: matched.status
-  };
+      const id = matched.reservationId || matched.id;
+      if (!id) continue;
+      return {
+        id,
+        code: matched.code || matched.reservationCode || matched.confirmationCode,
+        status: matched.status
+      };
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] match lookup failed for phone variant:', phone, err?.message || err);
+    }
+  }
+
+  return null;
 }
 
 async function waitForReservationMatchWithId(
@@ -1466,18 +1517,10 @@ async function beginAlterReservationFlow(
 
 async function queryReservationsDeterministic(from: string): Promise<{ ok: boolean; message: string }> {
   try {
-    const phone = toDigitsPhone(from);
-    const mcpReady = await ensureReservasMcpReady();
-    if (!mcpReady) {
+    const all = await queryReservationsByPhoneVariants(from);
+    if (!all.length && !(await ensureReservasMcpReady())) {
       return { ok: false, message: 'Tive uma instabilidade para consultar suas reservas agora 😕' };
     }
-    const result = await callReservasToolWithTimeout(
-      'query_reservations',
-      { clientPhone: phone },
-      { timeoutMs: 15000, retries: 1, retryDelayMs: 600 }
-    );
-    const payload = parseMcpToolText(result);
-    const all = extractReservationsList(payload);
 
     if (all.length === 0) {
       const fallback = await searchReservationsAdminFallback(from);
