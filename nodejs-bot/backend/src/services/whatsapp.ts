@@ -128,6 +128,7 @@ const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
 const MIN_RESERVATION_LEAD_MINUTES = 120;
 const ADMIN_RESERVATION_PAGE_SIZE = 6;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
+const PT_NUMBER_TOKEN_PATTERN = '(?:\\d+|zero|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)';
 const HAPPY_HOUR_INFO_TEXT = [
   '*Happy Hour Kharina*',
   '_De segunda a sexta-feira, das 16h às 20h._',
@@ -398,6 +399,49 @@ function normalizeIntentText(text: string): string {
     .trim();
 }
 
+function parsePtNumberToken(token: string): number | null {
+  const normalized = String(token || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w]/g, '')
+    .trim();
+  if (!normalized) return null;
+  if (/^\d+$/.test(normalized)) {
+    const parsed = parseInt(normalized, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+
+  const numberMap: Record<string, number> = {
+    zero: 0,
+    um: 1,
+    uma: 1,
+    dois: 2,
+    duas: 2,
+    tres: 3,
+    quatro: 4,
+    cinco: 5,
+    seis: 6,
+    sete: 7,
+    oito: 8,
+    nove: 9,
+    dez: 10,
+    onze: 11,
+    doze: 12,
+    treze: 13,
+    catorze: 14,
+    quatorze: 14,
+    quinze: 15,
+    dezesseis: 16,
+    dezessete: 17,
+    dezoito: 18,
+    dezenove: 19,
+    vinte: 20,
+  };
+
+  return numberMap[normalized] ?? null;
+}
+
 function extractPhoneCandidate(text: string): string | null {
   const matches = String(text || '').match(/\+?\d[\d\s().-]{8,}\d/g) || [];
   for (const raw of matches) {
@@ -556,20 +600,29 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   if (peopleMatch) {
     const val = parseInt((peopleMatch[1] || peopleMatch[2] || '0'), 10);
     if (!Number.isNaN(val) && val > 0) updates.people = val;
+  } else {
+    const peopleWordMatch =
+      tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*(pessoa|pessoas|adulto|adultos)\\b`)) ||
+      tNoAccent.match(new RegExp(`\\b(pessoas?|adultos?)\\s*[:\\-]?\\s*(${PT_NUMBER_TOKEN_PATTERN})\\b`));
+    const val = parsePtNumberToken((peopleWordMatch?.[1] || peopleWordMatch?.[2] || '').trim());
+    if (val !== null && val > 0) updates.people = val;
   }
 
   if (
     /sem\s+crian/.test(tNoAccent) ||
     /\b0\s*crian/.test(tNoAccent) ||
     /\bnao\s+(tera|vai\s+ter|tem)\s+crian/.test(tNoAccent) ||
-    /\bnenhuma\s+crian/.test(tNoAccent)
+    /\bnenhuma\s+crian/.test(tNoAccent) ||
+    /^(nao|nenhuma|0)$/.test(tNoAccent.trim())
   ) {
     updates.kids = 0;
   } else {
-    const kidsMatch = tNoAccent.match(/\b(\d+)\s*(crianca|criancas)\b/);
+    const kidsMatch =
+      tNoAccent.match(/\b(\d+)\s*(crianca|criancas)\b/) ||
+      tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*(crianca|criancas)\\b`));
     if (kidsMatch) {
-      const k = parseInt(kidsMatch[1], 10);
-      if (!Number.isNaN(k) && k >= 0) updates.kids = k;
+      const k = parsePtNumberToken(kidsMatch[1]);
+      if (k !== null && k >= 0) updates.kids = k;
     }
   }
 
@@ -658,16 +711,20 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
 }
 
 function extractStandalonePeople(text: string): number | null {
-  const t = String(text || '').toLowerCase().trim();
+  const t = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
   if (!t) return null;
   // Never infer adults from kids-only messages.
   if (/\bcrian/.test(t) && !/\b(adulto|adultos|pessoa|pessoas)\b/.test(t)) return null;
 
-  // Accept first number when it starts the sentence, e.g. "4 para amanhã às 11".
-  const m = t.match(/^(?:sao|são)?\s*(\d{1,2})\b/);
+  // Accept first numeric token when it starts the sentence, e.g. "4 para amanhã às 11" or "seis".
+  const m = t.match(new RegExp(`^(?:sao\\s+)?(${PT_NUMBER_TOKEN_PATTERN})\\b`));
   if (!m) return null;
-  const n = parseInt(m[1], 10);
-  if (Number.isNaN(n) || n <= 0 || n > 30) return null;
+  const n = parsePtNumberToken(m[1]);
+  if (n === null || n <= 0 || n > 30) return null;
   return n;
 }
 
