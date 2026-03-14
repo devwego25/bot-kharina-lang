@@ -3752,6 +3752,9 @@ async function handleDeterministicCommand(
   const isDeliveryIntent =
     /\b(delivery|entrega|ifood)\b/.test(normalizedNoAccent) ||
     (/\b(pedir|pedido)\b/.test(normalizedNoAccent) && /\b(entrega|delivery|ifood)\b/.test(normalizedNoAccent));
+  const isNewOrderIntent =
+    /\b(quero|queria|gostaria|preciso|posso|vou)\b.*\b(fazer\s+um\s+pedido|pedir|pedido)\b/.test(normalizedNoAccent) ||
+    /\b(fazer\s+um\s+pedido|novo\s+pedido)\b/.test(normalizedNoAccent);
   const mentionedUnit = getMentionedUnitFromText(text);
   const contactTargetUnit = mentionedUnit?.name || state.preferred_unit_name || '';
   const isUnitContactQuestion =
@@ -4011,6 +4014,13 @@ async function handleDeterministicCommand(
     await sendWhatsAppSticker(from, '1296835615764631').catch((err) => {
       console.error('[WhatsApp] Thanks sticker async failed:', err?.message || err);
     });
+    return true;
+  }
+
+  if (!isInActiveFlow(state) && isNewOrderIntent) {
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await sendDeliveryCitiesMenu(from);
     return true;
   }
 
