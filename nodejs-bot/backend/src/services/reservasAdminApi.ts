@@ -31,6 +31,11 @@ export type ReservationListItem = {
   kids?: number | null;
   status: string;
   notes?: string | null;
+  storeId?: string;
+  store?: {
+    id?: string;
+    name?: string;
+  } | null;
 };
 
 export type ReservationListResponse = {
@@ -125,14 +130,26 @@ class ReservasAdminApiService {
   }
 
   async listReservations(input: {
-    storeId: string;
+    storeId?: string;
     startDate?: string;
     endDate?: string;
     status?: string;
+    search?: string;
     page?: number;
     limit?: number;
   }): Promise<ReservationListResponse> {
     return this.request<ReservationListResponse>('GET', '/admin/reservations', input);
+  }
+
+  async searchReservations(search: string, input?: {
+    status?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<ReservationListResponse> {
+    return this.request<ReservationListResponse>('GET', '/admin/reservations', {
+      search,
+      ...(input || {})
+    });
   }
 }
 

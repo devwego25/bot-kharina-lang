@@ -64,7 +64,7 @@ interface UserState {
   preferred_city?: string;
   preferred_store_id?: string;
   preferred_unit_name?: string;
-  pending_offer?: 'pet_friendly_reservation_offer';
+  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer';
   has_interacted?: boolean;
   last_interactive_menu?: string;
   last_message_timestamp?: number;
@@ -1237,7 +1237,7 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
   );
   const payload = parseMcpToolText(result);
   const all = extractReservationsList(payload);
-  return all
+  const mapped = all
     .filter((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'))
     .map((x: any) => ({
       reservationId: String(x?.reservationId || x?.id || ''),
@@ -1251,6 +1251,8 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
       status: statusLabel(x?.status)
     }))
     .filter((x: ActiveReservation) => x.reservationId);
+  if (mapped.length > 0) return mapped;
+  return searchReservationsAdminFallback(phoneRaw);
 }
 
 async function fetchActiveReservationsWithRetry(phoneRaw: string): Promise<ActiveReservation[]> {
@@ -1266,6 +1268,72 @@ async function fetchActiveReservationsWithRetry(phoneRaw: string): Promise<Activ
       return [];
     }
   }
+}
+
+function formatActiveReservationsMessage(reservations: ActiveReservation[]): string {
+  const lines = ['Encontrei estas reservas no seu número:'];
+  reservations.slice(0, 8).forEach((r, idx) => {
+    lines.push(
+      `${idx + 1}. 🔢 Código: ${r.code}\n` +
+      `📍 Unidade: ${r.storeName}\n` +
+      `📅 Data: ${toBrDate(r.date)}\n` +
+      `⏰ Horário: ${normalizeTime(r.time)}\n` +
+      `👥 Total de pessoas: ${r.people}\n` +
+      `${statusEmoji(r.status)} Status: ${statusLabel(r.status)}`
+    );
+  });
+  const hasActive = reservations.some((x) => !String(x.status || '').toLowerCase().includes('cancel'));
+  lines.push(hasActive
+    ? 'Se quiser, eu também posso cancelar ou alterar uma reserva ativa.'
+    : 'No momento, todas as reservas listadas estão canceladas.');
+  return lines.join('\n\n');
+}
+
+async function searchReservationsAdminFallback(phoneRaw: string): Promise<ActiveReservation[]> {
+  if (!reservasAdminApiService.isConfigured()) return [];
+
+  const digits = toDigitsPhone(phoneRaw);
+  const localPhone = digits.startsWith('55') ? digits.slice(2) : digits;
+  const searchTerms = Array.from(new Set([
+    localPhone,
+    localPhone.slice(-10),
+    localPhone.slice(-8),
+  ].filter((term) => term && term.length >= 8)));
+
+  const results = new Map<string, ActiveReservation>();
+  for (const term of searchTerms) {
+    try {
+      const response = await reservasAdminApiService.searchReservations(term, { status: 'confirmed', page: 1, limit: 20 });
+      for (const item of response.data || []) {
+        const itemPhone = toDigitsPhone(String(item.customerPhone || ''));
+        if (!itemPhone) continue;
+        const samePhone =
+          itemPhone === localPhone ||
+          itemPhone === localPhone.slice(-10) ||
+          localPhone.endsWith(itemPhone) ||
+          itemPhone.endsWith(localPhone.slice(-8));
+        if (!samePhone) continue;
+
+        results.set(item.id, {
+          reservationId: String(item.id || ''),
+          code: displayReservationCode({ id: item.id }) || 'N/A',
+          storeId: String(item.storeId || item.store?.id || ''),
+          storeName: String(item.store?.name || 'N/A'),
+          date: String(item.date || ''),
+          time: normalizeTime(String(item.time || '')),
+          people: Number(item.guests || 0) + Number(item.kids || 0),
+          kids: item.kids !== undefined && item.kids !== null ? Number(item.kids) : undefined,
+          status: statusLabel(item.status),
+        });
+      }
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] admin fallback search failed:', term, err?.message || err);
+    }
+  }
+
+  return Array.from(results.values()).sort((a, b) =>
+    `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
+  );
 }
 
 async function findReservationMatchWithId(input: ReservationMatchInput): Promise<{ id?: string; code?: string; status?: string } | null> {
@@ -1412,29 +1480,28 @@ async function queryReservationsDeterministic(from: string): Promise<{ ok: boole
     const all = extractReservationsList(payload);
 
     if (all.length === 0) {
-      return { ok: true, message: 'Não encontrei reservas no seu número no momento.' };
+      const fallback = await searchReservationsAdminFallback(from);
+      if (fallback.length === 0) {
+        return { ok: true, message: 'Não encontrei reservas no seu número no momento.' };
+      }
+      return { ok: true, message: formatActiveReservationsMessage(fallback) };
     }
 
-    const lines = ['Encontrei estas reservas no seu número:'];
-    all.slice(0, 8).forEach((r: any, idx: number) => {
-      const code = displayReservationCode({
+    const mapped = all.map((r: any) => ({
+      reservationId: String(r?.reservationId || r?.id || ''),
+      code: displayReservationCode({
         id: r?.reservationId || r?.id,
         code: r?.code || r?.reservationCode || r?.confirmationCode
-      }) || 'N/A';
-      lines.push(
-        `${idx + 1}. 🔢 Código: ${code}\n` +
-        `📍 Unidade: ${r?.storeName || r?.store || 'N/A'}\n` +
-        `📅 Data: ${toBrDate(r?.date || '')}\n` +
-        `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
-        `👥 Total de pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
-        `${statusEmoji(r?.status)} Status: ${statusLabel(r?.status)}`
-      );
-    });
-    const hasActive = all.some((x: any) => !String(x?.status || '').toLowerCase().includes('cancel'));
-    lines.push(hasActive
-      ? 'Se quiser, eu também posso cancelar ou alterar uma reserva ativa.'
-      : 'No momento, todas as reservas listadas estão canceladas.');
-    return { ok: true, message: lines.join('\n\n') };
+      }) || 'N/A',
+      storeId: String(r?.storeId || ''),
+      storeName: String(r?.storeName || r?.store || 'N/A'),
+      date: String(r?.date || ''),
+      time: normalizeTime(String(r?.time || '')),
+      people: Number(r?.numberOfPeople ?? r?.people ?? 0),
+      kids: r?.kids !== undefined && r?.kids !== null ? Number(r.kids) : undefined,
+      status: statusLabel(r?.status)
+    }));
+    return { ok: true, message: formatActiveReservationsMessage(mapped) };
   } catch (err: any) {
     console.error('[ReservasDeterministic] query_reservations failed:', err?.message || err);
     return { ok: false, message: 'Não consegui consultar suas reservas agora. Pode tentar novamente em instantes?' };
@@ -3305,7 +3372,7 @@ async function handleDeterministicCommand(
   const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
   const isOfferAcceptance =
     isGenericAck ||
-    /^(sim quero|sim quero fazer|sim quero reservar|quero|quero fazer|quero reservar|vamos|bora|claro|com certeza|por favor)$/.test(normalizedIntent);
+    /^(sim quero|sim quero fazer|sim quero reservar|quero|quero fazer|quero reservar|vamos|bora|claro|com certeza|por favor|pode deixar|pode deixar por favor|deixa por favor|pode sim)$/.test(normalizedIntent);
   const isOfferRejection =
     /^(nao|não|nao obrigado|não obrigado|deixa|deixa pra la|deixa pra lá|agora nao|agora não)$/.test(normalizedIntent);
   const isBirthdayCakeQuestion =
@@ -3379,6 +3446,8 @@ async function handleDeterministicCommand(
 
   if (isBirthdayCakeQuestion) {
     const unit = state.preferred_unit_name ? ` da unidade ${state.preferred_unit_name}` : '';
+    state.pending_offer = 'cake_note_offer';
+    userStates.set(from, state);
     await sendWhatsAppText(
       from,
       `Sim! 🎂 Pode levar bolo de aniversário${unit}. Se quiser, já deixo essa observação na reserva também. 😊`
@@ -3442,6 +3511,32 @@ async function handleDeterministicCommand(
       state.pending_offer = undefined;
       userStates.set(from, state);
       await sendWhatsAppText(from, 'Sem problemas 😊 Se quiser, posso te ajudar com reserva, cardápio ou delivery.');
+      return true;
+    }
+  }
+
+  if (state.pending_offer === 'cake_note_offer') {
+    if (isOfferAcceptance) {
+      state.pending_offer = undefined;
+      userStates.set(from, state);
+      const active = await fetchActiveReservationsWithRetry(from);
+      if (active.length === 0) {
+        await sendWhatsAppText(from, 'Perfeito 😊 Se sua reserva foi confirmada manualmente e eu não conseguir localizar por aqui, me manda o código da reserva ou peça para a equipe adicionar a observação: levará bolo de aniversário.');
+        return true;
+      }
+      if (active.length === 1) {
+        await beginAlterReservationFlow(from, state, active[0], 'Obs: levará bolo de aniversário');
+        return true;
+      }
+      await sendWhatsAppText(from, 'Perfeito! Encontrei mais de uma reserva ativa. Me diga qual delas você quer atualizar com a observação do bolo.');
+      await sendManageReservationMenu(from, 'alter', active);
+      return true;
+    }
+
+    if (isOfferRejection || isThanks) {
+      state.pending_offer = undefined;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Sem problemas 😊');
       return true;
     }
   }
