@@ -463,6 +463,72 @@ function getMentionedUnitFromText(text: string): { name: string; storeId: string
   return match ? UNIT_CONFIG[match.id] : null;
 }
 
+function inferCityFromUnitName(unitName?: string): 'Curitiba' | 'Londrina' | 'São Paulo' | undefined {
+  const normalized = normalizeUnitName(String(unitName || ''));
+  if (!normalized) return undefined;
+  if (normalized === 'londrina') return 'Londrina';
+  if (normalized === 'sao paulo') return 'São Paulo';
+  if (Object.values(UNIT_CONFIG).some((unit) => normalizeUnitName(unit.name) === normalized)) return 'Curitiba';
+  return undefined;
+}
+
+function getCardapioCommandFromContext(unitName?: string, city?: string): 'cardapio_curitiba' | 'cardapio_londrina' | 'cardapio_saopaulo' | null {
+  const resolvedCity = city || inferCityFromUnitName(unitName);
+  if (resolvedCity === 'Londrina') return 'cardapio_londrina';
+  if (resolvedCity === 'São Paulo') return 'cardapio_saopaulo';
+  if (resolvedCity === 'Curitiba') return 'cardapio_curitiba';
+  return null;
+}
+
+async function sendDirectDeliveryHelp(to: string, unitName?: string, city?: string): Promise<void> {
+  const resolvedCity = city || inferCityFromUnitName(unitName) || 'Curitiba';
+
+  if (resolvedCity === 'São Paulo') {
+    await sendWhatsAppText(to, "Poxa, em SP ainda não tem delivery! 😢 Mas vem visitar a gente no Shopping Parque da Cidade! 🧡");
+    return;
+  }
+
+  if (resolvedCity === 'Londrina') {
+    const link = await db.getConfig('link_delivery_londrina');
+    await sendWhatsAppText(to, `Bora pedir! 😋\n👉 ${link || 'https://www.ifood.com.br/'}`);
+    return;
+  }
+
+  const normalizedUnit = normalizeUnitName(String(unitName || ''));
+  if (normalizedUnit === 'jardim botanico' || normalizedUnit === 'cabral') {
+    await sendWhatsAppText(
+      to,
+      [
+        'Perfeito! 🍔 Para *Cabral / Jardim Botânico*, o pedido é por este link:',
+        '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---cabral-cabral/8152217a-0a08-4512-8d18-ae240d7a1a37'
+      ].join('\n')
+    );
+    return;
+  }
+
+  if (normalizedUnit === 'agua verde' || normalizedUnit === 'batel' || normalizedUnit === 'portao') {
+    await sendWhatsAppText(
+      to,
+      [
+        'Perfeito! 🍔 Para *Água Verde / Batel / Portão*, o pedido é por este link:',
+        '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---agua-verde-agua-verde/9cda85cb-fa38-47a1-9831-818dfe5991e9?UTM_Medium=share'
+      ].join('\n')
+    );
+    return;
+  }
+
+  const msg = [
+    'Show! 🍔 Escolha a unidade mais perto de você pra pedir no iFood:',
+    '',
+    '1️⃣ *Água Verde / Batel / Portão*',
+    '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---agua-verde-agua-verde/9cda85cb-fa38-47a1-9831-818dfe5991e9?UTM_Medium=share',
+    '',
+    '2️⃣ *Cabral / Jardim Botânico*',
+    '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---cabral-cabral/8152217a-0a08-4512-8d18-ae240d7a1a37'
+  ].join('\n');
+  await sendWhatsAppText(to, msg);
+}
+
 function hasCompleteReservationData(reservation?: ReservationState): boolean {
   return !!reservation?.people &&
     !!reservation?.date_text &&
@@ -3452,6 +3518,12 @@ async function handleDeterministicCommand(
       /\b(pet|pets|cachorro|cachorros|cao|caes|c[aã]o|c[aã]es|dog|dogs)\b/.test(normalizedNoAccent) &&
       /\b(aceita|aceitam|permit|permitido|permitida|pode|podem|entrar|levar|ir|fica|ficar|tem)\b/.test(normalizedNoAccent)
     );
+  const isCardapioIntent =
+    /\b(cardapio|cardápio)\b/.test(normalizedNoAccent) ||
+    (/\bmenu\b/.test(normalizedNoAccent) && /\bcomida|almoco|almoço|jantar|pratos?\b/.test(normalizedNoAccent));
+  const isDeliveryIntent =
+    /\b(delivery|entrega|ifood)\b/.test(normalizedNoAccent) ||
+    (/\b(pedir|pedido)\b/.test(normalizedNoAccent) && /\b(entrega|delivery|ifood)\b/.test(normalizedNoAccent));
   const mentionedUnit = getMentionedUnitFromText(text);
   const contactTargetUnit = mentionedUnit?.name || state.preferred_unit_name || '';
   const isUnitContactQuestion =
@@ -3607,6 +3679,31 @@ async function handleDeterministicCommand(
       await sendWhatsAppText(from, 'Sem problemas 😊');
       return true;
     }
+  }
+
+  if (isInActiveFlow(state) && (isCardapioIntent || isDeliveryIntent)) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name;
+    const city = state.preferred_city || inferCityFromUnitName(unitName);
+    state.reservation = undefined;
+    state.preferred_store_id = undefined;
+    state.preferred_unit_name = undefined;
+    state.pending_offer = undefined;
+    if (city) state.preferred_city = city;
+    userStates.set(from, state);
+
+    if (isCardapioIntent) {
+      const cardapioCommand = getCardapioCommandFromContext(unitName, city);
+      if (cardapioCommand) {
+        const msg = await buildCardapioMessage(cardapioCommand);
+        await sendWhatsAppText(from, unitName ? `${msg}\n\nPara a unidade ${unitName}, este é o cardápio correspondente. 😊` : msg);
+      } else {
+        await sendCitiesMenu(from);
+      }
+      return true;
+    }
+
+    await sendDirectDeliveryHelp(from, unitName, city);
+    return true;
   }
 
   // Greeting outside active flow -> open main menu immediately
