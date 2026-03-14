@@ -687,6 +687,7 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     /sem\s+crian/.test(tNoAccent) ||
     /\b0\s*crian/.test(tNoAccent) ||
     /\bnao\s+(tera|vai\s+ter|tem)\s+crian/.test(tNoAccent) ||
+    /\bnao\s+(havera|vai\s+haver)\s+crian/.test(tNoAccent) ||
     /\bnenhuma\s+crian/.test(tNoAccent) ||
     /^(nao|nenhuma|0)$/.test(tNoAccent.trim())
   ) {
