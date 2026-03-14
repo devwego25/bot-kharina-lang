@@ -1344,6 +1344,42 @@ type ReservationMatchInput = {
   people: number;
 };
 
+function phonesLookEquivalent(aRaw: string, bRaw: string): boolean {
+  const a = toDigitsPhone(aRaw);
+  const b = toDigitsPhone(bRaw);
+  if (!a || !b) return false;
+  const localA = a.startsWith('55') ? a.slice(2) : a;
+  const localB = b.startsWith('55') ? b.slice(2) : b;
+  return (
+    a === b ||
+    localA === localB ||
+    localA.endsWith(localB) ||
+    localB.endsWith(localA) ||
+    localA.slice(-10) === localB.slice(-10) ||
+    localA.slice(-8) === localB.slice(-8)
+  );
+}
+
+function adminReservationMatchesInput(item: any, input: ReservationMatchInput): boolean {
+  const itemDate = normalizeIsoDate(String(item?.date || ''));
+  const itemTime = normalizeTime(String(item?.time || ''));
+  const itemStoreId = String(item?.storeId || item?.store?.id || '').toLowerCase();
+  const itemStatus = String(item?.status || '').toLowerCase();
+  const itemPhone = String(item?.customerPhone || item?.clientPhone || item?.phone || '');
+  const guests = Number(item?.guests ?? item?.numberOfPeople ?? item?.people ?? 0);
+  const kids = Number(item?.kids ?? 0);
+  const possibleTotals = new Set<number>([guests, guests + kids]);
+
+  return (
+    itemDate === input.date &&
+    itemTime === input.time &&
+    itemStoreId === String(input.storeId).toLowerCase() &&
+    !itemStatus.includes('cancel') &&
+    phonesLookEquivalent(itemPhone, input.phone) &&
+    possibleTotals.has(Number(input.people))
+  );
+}
+
 function extractReservationsList(payload: any): any[] {
   if (!payload) return [];
   if (Array.isArray(payload?.reservations)) return payload.reservations;
@@ -1524,6 +1560,60 @@ async function findReservationMatchWithId(input: ReservationMatchInput): Promise
   return null;
 }
 
+async function findReservationMatchViaAdmin(input: ReservationMatchInput): Promise<{ id?: string; code?: string; status?: string } | null> {
+  if (!reservasAdminApiService.isConfigured()) return null;
+
+  try {
+    const byStore = await reservasAdminApiService.listReservations({
+      storeId: input.storeId,
+      startDate: input.date,
+      endDate: input.date,
+      page: 1,
+      limit: 100
+    });
+    const matched = (byStore.data || []).find((item) => adminReservationMatchesInput(item, input));
+    if (matched?.id) {
+      return {
+        id: String(matched.id),
+        code: displayReservationCode({ id: matched.id }),
+        status: matched.status
+      };
+    }
+  } catch (err: any) {
+    console.error('[ReservasDeterministic] admin match by store/date failed:', err?.message || err);
+  }
+
+  const digits = toDigitsPhone(input.phone);
+  const localPhone = digits.startsWith('55') ? digits.slice(2) : digits;
+  const searchTerms = Array.from(new Set([
+    localPhone,
+    localPhone.slice(-10),
+    localPhone.slice(-8),
+    localPhone.slice(-4),
+  ].filter((term) => term && term.length >= 4)));
+
+  for (const term of searchTerms) {
+    try {
+      const response = await reservasAdminApiService.searchReservations(term, {
+        page: 1,
+        limit: 50
+      });
+      const matched = (response.data || []).find((item) => adminReservationMatchesInput(item, input));
+      if (matched?.id) {
+        return {
+          id: String(matched.id),
+          code: displayReservationCode({ id: matched.id }),
+          status: matched.status
+        };
+      }
+    } catch (err: any) {
+      console.error('[ReservasDeterministic] admin match by search failed:', term, err?.message || err);
+    }
+  }
+
+  return null;
+}
+
 async function waitForReservationMatchWithId(
   input: ReservationMatchInput,
   attempts = 6,
@@ -1533,6 +1623,8 @@ async function waitForReservationMatchWithId(
     try {
       const hit = await findReservationMatchWithId(input);
       if (hit?.id) return hit;
+      const adminHit = await findReservationMatchViaAdmin(input);
+      if (adminHit?.id) return adminHit;
     } catch (err: any) {
       console.error('[ReservasDeterministic] wait match attempt failed:', err?.message || err);
     }
