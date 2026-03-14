@@ -46,6 +46,24 @@ const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
 const MIN_RESERVATION_LEAD_MINUTES = 120;
 const ADMIN_RESERVATION_PAGE_SIZE = 6;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
+const PT_NUMBER_TOKEN_PATTERN = '(?:\\d+|zero|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)';
+const HAPPY_HOUR_INFO_TEXT = [
+    '*Happy Hour Kharina*',
+    '_De segunda a sexta-feira, das 16h às 20h._',
+    '*Exceto nos feriados.*',
+    '',
+    'O melhor Happy Hour, com *até 50% de desconto*.',
+    '',
+    'Se quiser, também posso te ajudar com cardápio, reserva ou delivery.'
+].join('\n');
+const PET_FRIENDLY_INFO_TEXT = [
+    '*Pet-friendly no Kharina*',
+    'A unidade *Água Verde*, na *área externa*, é pet-friendly. 🐶',
+    '',
+    'Vamos ficar felizes em receber você e seu pet por lá.',
+    '',
+    'Se quiser, também posso te ajudar a fazer uma *reserva para a unidade Água Verde*.'
+].join('\n');
 // Command sets
 const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
 const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite', 'hello', 'hi']);
@@ -275,6 +293,47 @@ function normalizeIntentText(text) {
         .replace(/\s+/g, ' ')
         .trim();
 }
+function parsePtNumberToken(token) {
+    const normalized = String(token || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w]/g, '')
+        .trim();
+    if (!normalized)
+        return null;
+    if (/^\d+$/.test(normalized)) {
+        const parsed = parseInt(normalized, 10);
+        return Number.isNaN(parsed) ? null : parsed;
+    }
+    const numberMap = {
+        zero: 0,
+        um: 1,
+        uma: 1,
+        dois: 2,
+        duas: 2,
+        tres: 3,
+        quatro: 4,
+        cinco: 5,
+        seis: 6,
+        sete: 7,
+        oito: 8,
+        nove: 9,
+        dez: 10,
+        onze: 11,
+        doze: 12,
+        treze: 13,
+        catorze: 14,
+        quatorze: 14,
+        quinze: 15,
+        dezesseis: 16,
+        dezessete: 17,
+        dezoito: 18,
+        dezenove: 19,
+        vinte: 20,
+    };
+    return numberMap[normalized] ?? null;
+}
 function extractPhoneCandidate(text) {
     const matches = String(text || '').match(/\+?\d[\d\s().-]{8,}\d/g) || [];
     for (const raw of matches) {
@@ -285,6 +344,73 @@ function extractPhoneCandidate(text) {
         }
     }
     return null;
+}
+function getMentionedUnitFromText(text) {
+    const normalized = String(text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    const match = UNIT_TEXT_MATCHERS.find((unit) => unit.rx.test(normalized));
+    return match ? UNIT_CONFIG[match.id] : null;
+}
+function inferCityFromUnitName(unitName) {
+    const normalized = normalizeUnitName(String(unitName || ''));
+    if (!normalized)
+        return undefined;
+    if (normalized === 'londrina')
+        return 'Londrina';
+    if (normalized === 'sao paulo')
+        return 'São Paulo';
+    if (Object.values(UNIT_CONFIG).some((unit) => normalizeUnitName(unit.name) === normalized))
+        return 'Curitiba';
+    return undefined;
+}
+function getCardapioCommandFromContext(unitName, city) {
+    const resolvedCity = city || inferCityFromUnitName(unitName);
+    if (resolvedCity === 'Londrina')
+        return 'cardapio_londrina';
+    if (resolvedCity === 'São Paulo')
+        return 'cardapio_saopaulo';
+    if (resolvedCity === 'Curitiba')
+        return 'cardapio_curitiba';
+    return null;
+}
+async function sendDirectDeliveryHelp(to, unitName, city) {
+    const resolvedCity = city || inferCityFromUnitName(unitName) || 'Curitiba';
+    if (resolvedCity === 'São Paulo') {
+        await sendWhatsAppText(to, "Poxa, em SP ainda não tem delivery! 😢 Mas vem visitar a gente no Shopping Parque da Cidade! 🧡");
+        return;
+    }
+    if (resolvedCity === 'Londrina') {
+        const link = await db_1.db.getConfig('link_delivery_londrina');
+        await sendWhatsAppText(to, `Bora pedir! 😋\n👉 ${link || 'https://www.ifood.com.br/'}`);
+        return;
+    }
+    const normalizedUnit = normalizeUnitName(String(unitName || ''));
+    if (normalizedUnit === 'jardim botanico' || normalizedUnit === 'cabral') {
+        await sendWhatsAppText(to, [
+            'Perfeito! 🍔 Para *Cabral / Jardim Botânico*, o pedido é por este link:',
+            '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---cabral-cabral/8152217a-0a08-4512-8d18-ae240d7a1a37'
+        ].join('\n'));
+        return;
+    }
+    if (normalizedUnit === 'agua verde' || normalizedUnit === 'batel' || normalizedUnit === 'portao') {
+        await sendWhatsAppText(to, [
+            'Perfeito! 🍔 Para *Água Verde / Batel / Portão*, o pedido é por este link:',
+            '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---agua-verde-agua-verde/9cda85cb-fa38-47a1-9831-818dfe5991e9?UTM_Medium=share'
+        ].join('\n'));
+        return;
+    }
+    const msg = [
+        'Show! 🍔 Escolha a unidade mais perto de você pra pedir no iFood:',
+        '',
+        '1️⃣ *Água Verde / Batel / Portão*',
+        '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---agua-verde-agua-verde/9cda85cb-fa38-47a1-9831-818dfe5991e9?UTM_Medium=share',
+        '',
+        '2️⃣ *Cabral / Jardim Botânico*',
+        '👉 https://www.ifood.com.br/delivery/curitiba-pr/kharina-steakhouse---cabral-cabral/8152217a-0a08-4512-8d18-ae240d7a1a37'
+    ].join('\n');
+    await sendWhatsAppText(to, msg);
 }
 function hasCompleteReservationData(reservation) {
     return !!reservation?.people &&
@@ -415,54 +541,63 @@ function parseReservationDetails(text) {
         if (!Number.isNaN(val) && val > 0)
             updates.people = val;
     }
+    else {
+        const peopleWordMatch = tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*(pessoa|pessoas|adulto|adultos)\\b`)) ||
+            tNoAccent.match(new RegExp(`\\b(pessoas?|adultos?)\\s*[:\\-]?\\s*(${PT_NUMBER_TOKEN_PATTERN})\\b`));
+        const val = parsePtNumberToken((peopleWordMatch?.[1] || peopleWordMatch?.[2] || '').trim());
+        if (val !== null && val > 0)
+            updates.people = val;
+    }
     if (/sem\s+crian/.test(tNoAccent) ||
         /\b0\s*crian/.test(tNoAccent) ||
         /\bnao\s+(tera|vai\s+ter|tem)\s+crian/.test(tNoAccent) ||
-        /\bnenhuma\s+crian/.test(tNoAccent)) {
+        /\bnenhuma\s+crian/.test(tNoAccent) ||
+        /^(nao|nenhuma|0)$/.test(tNoAccent.trim())) {
         updates.kids = 0;
     }
     else {
-        const kidsMatch = tNoAccent.match(/\b(\d+)\s*(crianca|criancas)\b/);
+        const kidsMatch = tNoAccent.match(/\b(\d+)\s*(crianca|criancas)\b/) ||
+            tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*(crianca|criancas)\\b`));
         if (kidsMatch) {
-            const k = parseInt(kidsMatch[1], 10);
-            if (!Number.isNaN(k) && k >= 0)
+            const k = parsePtNumberToken(kidsMatch[1]);
+            if (k !== null && k >= 0)
                 updates.kids = k;
         }
     }
     const today = new Date();
-    if (/\bhoje\b/.test(tNoAccent)) {
-        updates.date_text = toIsoDate(today);
-    }
-    else if (/\bamanh/.test(tNoAccent)) {
-        const d = new Date(today);
-        d.setDate(d.getDate() + 1);
-        updates.date_text = toIsoDate(d);
-    }
-    else {
-        const weekdayMap = [
-            { rx: /\b(domingo)\b/, day: 0 },
-            { rx: /\b(segunda|segunda-feira)\b/, day: 1 },
-            { rx: /\b(terca|terça|terca-feira|terça-feira)\b/, day: 2 },
-            { rx: /\b(quarta|quarta-feira)\b/, day: 3 },
-            { rx: /\b(quinta|quinta-feira)\b/, day: 4 },
-            { rx: /\b(sexta|sexta-feira)\b/, day: 5 },
-            { rx: /\b(sabado|sábado)\b/, day: 6 }
-        ];
-        const byWeekday = weekdayMap.find((w) => w.rx.test(tNoAccent));
-        if (byWeekday) {
-            updates.date_text = toIsoDate(nextWeekdayDate(byWeekday.day, today));
+    const dmY = tNoAccent.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+    if (dmY) {
+        const day = parseInt(dmY[1], 10);
+        const mon = parseInt(dmY[2], 10);
+        let year = dmY[3] ? parseInt(dmY[3], 10) : today.getFullYear();
+        if (year < 100)
+            year += 2000;
+        if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) {
+            updates.date_text = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         }
     }
     if (!updates.date_text) {
-        const dmY = tNoAccent.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
-        if (dmY) {
-            const day = parseInt(dmY[1], 10);
-            const mon = parseInt(dmY[2], 10);
-            let year = dmY[3] ? parseInt(dmY[3], 10) : today.getFullYear();
-            if (year < 100)
-                year += 2000;
-            if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) {
-                updates.date_text = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        if (/\bhoje\b/.test(tNoAccent)) {
+            updates.date_text = toIsoDate(today);
+        }
+        else if (/\bamanh/.test(tNoAccent)) {
+            const d = new Date(today);
+            d.setDate(d.getDate() + 1);
+            updates.date_text = toIsoDate(d);
+        }
+        else {
+            const weekdayMap = [
+                { rx: /\b(domingo)\b/, day: 0 },
+                { rx: /\b(segunda|segunda-feira)\b/, day: 1 },
+                { rx: /\b(terca|terça|terca-feira|terça-feira)\b/, day: 2 },
+                { rx: /\b(quarta|quarta-feira)\b/, day: 3 },
+                { rx: /\b(quinta|quinta-feira)\b/, day: 4 },
+                { rx: /\b(sexta|sexta-feira)\b/, day: 5 },
+                { rx: /\b(sabado|sábado)\b/, day: 6 }
+            ];
+            const byWeekday = weekdayMap.find((w) => w.rx.test(tNoAccent));
+            if (byWeekday) {
+                updates.date_text = toIsoDate(nextWeekdayDate(byWeekday.day, today));
             }
         }
     }
@@ -483,7 +618,7 @@ function parseReservationDetails(text) {
     else if (/\bmeia\s*noite\b/.test(tNoAccent)) {
         hh = '00';
     }
-    const hm = tNoAccent.match(/\b(\d{1,2})[:h](\d{2})\b/);
+    const hm = tNoAccent.match(/\b(\d{1,2})(?::|h)(\d{2})\s*h?\b/);
     if (!hh && hm) {
         hh = hm[1];
         mm = hm[2];
@@ -508,7 +643,8 @@ function parseReservationDetails(text) {
     const noteMarkers = [
         'obs', 'observa', 'anivers', 'janela', 'parquinho', 'perto do parquinho',
         'cadeira de bebe', 'cadeirinha', 'cadeirante', 'acessivel', 'acessível',
-        'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar'
+        'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar',
+        'evento', 'atras', 'atrasar', 'varia', 'aprox', 'aproxim', 'juntar as mesas'
     ];
     const hasNoteMarker = noteMarkers.some((m) => tNoAccent.includes(m));
     const onlyKidsAnswer = /^(\s*(sem crian|nao|nenhuma|0)\s*)+$/.test(tNoAccent);
@@ -518,20 +654,54 @@ function parseReservationDetails(text) {
     return updates;
 }
 function extractStandalonePeople(text) {
-    const t = String(text || '').toLowerCase().trim();
+    const t = String(text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
     if (!t)
         return null;
     // Never infer adults from kids-only messages.
     if (/\bcrian/.test(t) && !/\b(adulto|adultos|pessoa|pessoas)\b/.test(t))
         return null;
-    // Accept first number when it starts the sentence, e.g. "4 para amanhã às 11".
-    const m = t.match(/^(?:sao|são)?\s*(\d{1,2})\b/);
+    // Accept first numeric token when it starts the sentence, e.g. "4 para amanhã às 11" or "seis".
+    const m = t.match(new RegExp(`^(?:sao\\s+)?(${PT_NUMBER_TOKEN_PATTERN})\\b`));
     if (!m)
         return null;
-    const n = parseInt(m[1], 10);
-    if (Number.isNaN(n) || n <= 0 || n > 30)
+    const n = parsePtNumberToken(m[1]);
+    if (n === null || n <= 0 || n > 30)
         return null;
     return n;
+}
+function extractExplicitNameUpdate(text, opts) {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!raw)
+        return null;
+    const explicit = raw.match(/^(?:alterar\s+o\s+)?nome\s*[:\-]?\s*(.+)$/i);
+    if (explicit) {
+        const candidate = explicit[1].trim();
+        if (candidate &&
+            candidate.length >= 3 &&
+            !/\b(data|horario|horário|adult|crianc|reserva|mesa|bolo|observa|telefone)\b/i.test(candidate)) {
+            return candidate;
+        }
+    }
+    if (!opts?.allowBareName)
+        return null;
+    if (/\d/.test(raw))
+        return null;
+    if (/[!?]/.test(raw))
+        return null;
+    if (/^(sim|nao|não|ok|menu|voltar|data|horario|horário|nome)$/i.test(raw))
+        return null;
+    if (/\b(data|horario|horário|adult|crianc|reserva|mesa|bolo|observa|telefone|unidade)\b/i.test(raw))
+        return null;
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 5)
+        return null;
+    if (!words.every((word) => /^[A-Za-zÀ-ÿ'`-]+$/.test(word)))
+        return null;
+    return raw;
 }
 function extractPartyDeltas(text) {
     const t = String(text || '')
@@ -732,6 +902,60 @@ async function ensureReservasMcpReady() {
 }
 function toDigitsPhone(raw) {
     return String(raw || '').replace(/\D/g, '');
+}
+function normalizeReservationPhone(raw) {
+    const digits = toDigitsPhone(raw);
+    if (!digits)
+        return '';
+    if (digits.startsWith('55'))
+        return digits;
+    if (digits.length === 10 || digits.length === 11)
+        return `55${digits}`;
+    return digits;
+}
+function getPhoneLookupVariants(raw) {
+    const digits = normalizeReservationPhone(raw);
+    if (!digits)
+        return [];
+    const local = digits.startsWith('55') ? digits.slice(2) : digits;
+    if (local.length < 10) {
+        return Array.from(new Set([digits, local].filter(Boolean)));
+    }
+    const ddd = local.slice(0, 2);
+    const subscriber = local.slice(2);
+    const variants = new Set();
+    const addVariant = (localNumber) => {
+        if (!localNumber)
+            return;
+        variants.add(localNumber);
+        variants.add(`55${localNumber}`);
+    };
+    addVariant(local);
+    if (subscriber.length === 9 && subscriber.startsWith('9')) {
+        addVariant(`${ddd}${subscriber.slice(1)}`);
+    }
+    else if (subscriber.length === 8) {
+        addVariant(`${ddd}9${subscriber}`);
+    }
+    return Array.from(variants);
+}
+async function queryReservationsByPhoneVariants(phoneRaw) {
+    const mcpReady = await ensureReservasMcpReady();
+    if (!mcpReady)
+        return [];
+    for (const phone of getPhoneLookupVariants(phoneRaw)) {
+        try {
+            const result = await callReservasToolWithTimeout('query_reservations', { clientPhone: phone }, { timeoutMs: 15000, retries: 1, retryDelayMs: 600 });
+            const payload = parseMcpToolText(result);
+            const all = extractReservationsList(payload);
+            if (all.length > 0)
+                return all;
+        }
+        catch (err) {
+            console.error('[ReservasDeterministic] phone variant query failed:', phone, err?.message || err);
+        }
+    }
+    return [];
 }
 function parseMcpToolText(result) {
     try {
@@ -985,27 +1209,26 @@ async function callReservasToolWithTimeout(tool, args, opts) {
     throw lastErr;
 }
 async function fetchActiveReservations(phoneRaw) {
-    const phone = toDigitsPhone(phoneRaw);
-    const mcpReady = await ensureReservasMcpReady();
-    if (!mcpReady)
-        return [];
-    const result = await callReservasToolWithTimeout('query_reservations', { clientPhone: phone }, { timeoutMs: 15000, retries: 1, retryDelayMs: 600 });
-    const payload = parseMcpToolText(result);
-    const all = extractReservationsList(payload);
-    return all
+    const all = await queryReservationsByPhoneVariants(phoneRaw);
+    const mapped = all
         .filter((x) => !String(x?.status || '').toLowerCase().includes('cancel'))
         .map((x) => ({
         reservationId: String(x?.reservationId || x?.id || ''),
         code: displayReservationCode({ id: x?.reservationId || x?.id, code: x?.code || x?.reservationCode || x?.confirmationCode }) || 'N/A',
         storeId: String(x?.storeId || ''),
         storeName: String(x?.storeName || x?.store || 'N/A'),
+        name: String(x?.name || x?.clientName || x?.customerName || '').trim() || undefined,
         date: String(x?.date || ''),
         time: normalizeTime(String(x?.time || '')),
         people: Number(x?.numberOfPeople ?? x?.people ?? 0),
         kids: x?.kids !== undefined && x?.kids !== null ? Number(x.kids) : undefined,
+        notes: String(x?.notes || x?.occasion || '').trim() || undefined,
         status: statusLabel(x?.status)
     }))
         .filter((x) => x.reservationId);
+    if (mapped.length > 0)
+        return mapped;
+    return searchReservationsAdminFallback(phoneRaw);
 }
 async function fetchActiveReservationsWithRetry(phoneRaw) {
     try {
@@ -1023,25 +1246,94 @@ async function fetchActiveReservationsWithRetry(phoneRaw) {
         }
     }
 }
+function formatActiveReservationsMessage(reservations) {
+    const lines = ['Encontrei estas reservas no seu número:'];
+    reservations.slice(0, 8).forEach((r, idx) => {
+        lines.push(`${idx + 1}. 🔢 Código: ${r.code}\n` +
+            `📍 Unidade: ${r.storeName}\n` +
+            `📅 Data: ${toBrDate(r.date)}\n` +
+            `⏰ Horário: ${normalizeTime(r.time)}\n` +
+            `👥 Total de pessoas: ${r.people}\n` +
+            `${statusEmoji(r.status)} Status: ${statusLabel(r.status)}`);
+    });
+    const hasActive = reservations.some((x) => !String(x.status || '').toLowerCase().includes('cancel'));
+    lines.push(hasActive
+        ? 'Se quiser, eu também posso cancelar ou alterar uma reserva ativa.'
+        : 'No momento, todas as reservas listadas estão canceladas.');
+    return lines.join('\n\n');
+}
+async function searchReservationsAdminFallback(phoneRaw) {
+    if (!reservasAdminApi_1.reservasAdminApiService.isConfigured())
+        return [];
+    const digits = toDigitsPhone(phoneRaw);
+    const localPhone = digits.startsWith('55') ? digits.slice(2) : digits;
+    const searchTerms = Array.from(new Set([
+        localPhone,
+        localPhone.slice(-10),
+        localPhone.slice(-8),
+    ].filter((term) => term && term.length >= 8)));
+    const results = new Map();
+    for (const term of searchTerms) {
+        try {
+            const response = await reservasAdminApi_1.reservasAdminApiService.searchReservations(term, { status: 'confirmed', page: 1, limit: 20 });
+            for (const item of response.data || []) {
+                const itemPhone = toDigitsPhone(String(item.customerPhone || ''));
+                if (!itemPhone)
+                    continue;
+                const samePhone = itemPhone === localPhone ||
+                    itemPhone === localPhone.slice(-10) ||
+                    localPhone.endsWith(itemPhone) ||
+                    itemPhone.endsWith(localPhone.slice(-8));
+                if (!samePhone)
+                    continue;
+                results.set(item.id, {
+                    reservationId: String(item.id || ''),
+                    code: displayReservationCode({ id: item.id }) || 'N/A',
+                    storeId: String(item.storeId || item.store?.id || ''),
+                    storeName: String(item.store?.name || 'N/A'),
+                    name: String(item.customerName || '').trim() || undefined,
+                    date: String(item.date || ''),
+                    time: normalizeTime(String(item.time || '')),
+                    people: Number(item.guests || 0) + Number(item.kids || 0),
+                    kids: item.kids !== undefined && item.kids !== null ? Number(item.kids) : undefined,
+                    notes: String(item.notes || '').trim() || undefined,
+                    status: statusLabel(item.status),
+                });
+            }
+        }
+        catch (err) {
+            console.error('[ReservasDeterministic] admin fallback search failed:', term, err?.message || err);
+        }
+    }
+    return Array.from(results.values()).sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+}
 async function findReservationMatchWithId(input) {
-    const verifyResult = await callReservasToolWithTimeout('query_reservations', { clientPhone: input.phone }, { timeoutMs: 12000, retries: 0 });
-    const verifyPayload = parseMcpToolText(verifyResult);
-    const items = extractReservationsList(verifyPayload);
-    const matched = items.find((x) => normalizeIsoDate(x?.date) === input.date &&
-        normalizeTime(x?.time) === input.time &&
-        Number(x?.numberOfPeople || x?.people) === input.people &&
-        String(x?.storeId || '').toLowerCase() === String(input.storeId).toLowerCase() &&
-        !String(x?.status || '').toLowerCase().includes('cancel'));
-    if (!matched)
-        return null;
-    const id = matched.reservationId || matched.id;
-    if (!id)
-        return null;
-    return {
-        id,
-        code: matched.code || matched.reservationCode || matched.confirmationCode,
-        status: matched.status
-    };
+    for (const phone of getPhoneLookupVariants(input.phone)) {
+        try {
+            const verifyResult = await callReservasToolWithTimeout('query_reservations', { clientPhone: phone }, { timeoutMs: 12000, retries: 0 });
+            const verifyPayload = parseMcpToolText(verifyResult);
+            const items = extractReservationsList(verifyPayload);
+            const matched = items.find((x) => normalizeIsoDate(x?.date) === input.date &&
+                normalizeTime(x?.time) === input.time &&
+                Number(x?.numberOfPeople || x?.people) === input.people &&
+                String(x?.storeId || '').toLowerCase() === String(input.storeId).toLowerCase() &&
+                !String(x?.status || '').toLowerCase().includes('cancel'));
+            if (!matched)
+                continue;
+            const id = matched.reservationId || matched.id;
+            if (!id)
+                continue;
+            return {
+                id,
+                code: matched.code || matched.reservationCode || matched.confirmationCode,
+                status: matched.status
+            };
+        }
+        catch (err) {
+            console.error('[ReservasDeterministic] match lookup failed for phone variant:', phone, err?.message || err);
+        }
+    }
+    return null;
 }
 async function waitForReservationMatchWithId(input, attempts = 6, intervalMs = 1500) {
     for (let i = 0; i < attempts; i++) {
@@ -1084,12 +1376,14 @@ async function beginAlterReservationFlow(from, state, selected, initialText) {
         ...(state.reservation || {}),
         phone_confirmed: true,
         contact_phone: from,
+        name: selected.name || state.reservation?.name,
         date_text: selected.date || state.reservation?.date_text,
         time_text: selected.time || state.reservation?.time_text,
         kids: selected.kids ?? state.reservation?.kids,
         people: selected.kids !== undefined
             ? Math.max(0, selected.people - Number(selected.kids || 0))
             : (state.reservation?.people ?? selected.people),
+        notes: selected.notes || state.reservation?.notes,
         pending_change_source_id: selected.reservationId,
         pending_change_source_code: selected.code,
         awaiting_confirmation: false
@@ -1108,6 +1402,10 @@ async function beginAlterReservationFlow(from, state, selected, initialText) {
         }
         if (Object.keys(extracted).length > 0) {
             state.reservation = { ...(state.reservation || {}), ...extracted };
+        }
+        const extractedName = extractExplicitNameUpdate(incoming, { allowBareName: !state.reservation?.name });
+        if (extractedName) {
+            state.reservation = { ...(state.reservation || {}), name: extractedName };
         }
     }
     userStates.set(from, state);
@@ -1129,35 +1427,32 @@ async function beginAlterReservationFlow(from, state, selected, initialText) {
 }
 async function queryReservationsDeterministic(from) {
     try {
-        const phone = toDigitsPhone(from);
-        const mcpReady = await ensureReservasMcpReady();
-        if (!mcpReady) {
+        const all = await queryReservationsByPhoneVariants(from);
+        if (!all.length && !(await ensureReservasMcpReady())) {
             return { ok: false, message: 'Tive uma instabilidade para consultar suas reservas agora 😕' };
         }
-        const result = await callReservasToolWithTimeout('query_reservations', { clientPhone: phone }, { timeoutMs: 15000, retries: 1, retryDelayMs: 600 });
-        const payload = parseMcpToolText(result);
-        const all = extractReservationsList(payload);
         if (all.length === 0) {
-            return { ok: true, message: 'Não encontrei reservas no seu número no momento.' };
+            const fallback = await searchReservationsAdminFallback(from);
+            if (fallback.length === 0) {
+                return { ok: true, message: 'Não encontrei reservas no seu número no momento.' };
+            }
+            return { ok: true, message: formatActiveReservationsMessage(fallback) };
         }
-        const lines = ['Encontrei estas reservas no seu número:'];
-        all.slice(0, 8).forEach((r, idx) => {
-            const code = displayReservationCode({
+        const mapped = all.map((r) => ({
+            reservationId: String(r?.reservationId || r?.id || ''),
+            code: displayReservationCode({
                 id: r?.reservationId || r?.id,
                 code: r?.code || r?.reservationCode || r?.confirmationCode
-            }) || 'N/A';
-            lines.push(`${idx + 1}. 🔢 Código: ${code}\n` +
-                `📍 Unidade: ${r?.storeName || r?.store || 'N/A'}\n` +
-                `📅 Data: ${toBrDate(r?.date || '')}\n` +
-                `⏰ Horário: ${normalizeTime(r?.time || '')}\n` +
-                `👥 Total de pessoas: ${r?.numberOfPeople ?? r?.people ?? 'N/A'}\n` +
-                `${statusEmoji(r?.status)} Status: ${statusLabel(r?.status)}`);
-        });
-        const hasActive = all.some((x) => !String(x?.status || '').toLowerCase().includes('cancel'));
-        lines.push(hasActive
-            ? 'Se quiser, eu também posso cancelar ou alterar uma reserva ativa.'
-            : 'No momento, todas as reservas listadas estão canceladas.');
-        return { ok: true, message: lines.join('\n\n') };
+            }) || 'N/A',
+            storeId: String(r?.storeId || ''),
+            storeName: String(r?.storeName || r?.store || 'N/A'),
+            date: String(r?.date || ''),
+            time: normalizeTime(String(r?.time || '')),
+            people: Number(r?.numberOfPeople ?? r?.people ?? 0),
+            kids: r?.kids !== undefined && r?.kids !== null ? Number(r.kids) : undefined,
+            status: statusLabel(r?.status)
+        }));
+        return { ok: true, message: formatActiveReservationsMessage(mapped) };
     }
     catch (err) {
         console.error('[ReservasDeterministic] query_reservations failed:', err?.message || err);
@@ -1168,7 +1463,7 @@ async function createReservationDeterministic(from, state) {
     const r = state.reservation || {};
     const storeId = state.preferred_store_id;
     const unitName = state.preferred_unit_name || 'unidade selecionada';
-    const phone = toDigitsPhone(r.contact_phone || from);
+    const phone = normalizeReservationPhone(r.contact_phone || from);
     const date = normalizeIsoDate(r.date_text || '');
     const time = normalizeTime(r.time_text || '');
     const adults = Number(r.people || 0);
@@ -1851,18 +2146,29 @@ async function sendAdminReservationSummary(to) {
         await sendWhatsAppText(to, 'A integração da API de reservas ainda não foi configurada no bot.');
         return;
     }
-    const stats = await reservasAdminApi_1.reservasAdminApiService.getReservationStats();
-    const storeLines = (stats.reservationsByStore || [])
-        .slice()
-        .sort((a, b) => String(a.storeName || '').localeCompare(String(b.storeName || '')))
-        .map((item) => `- *${item.storeName}:* ${item.count}`);
+    const [globalStats, storeStats] = await Promise.all([
+        reservasAdminApi_1.reservasAdminApiService.getReservationStats(),
+        Promise.all(Object.values(UNIT_CONFIG).map(async (unit) => ({
+            name: unit.name,
+            stats: await reservasAdminApi_1.reservasAdminApiService.getReservationStats(unit.storeId),
+        }))),
+    ]);
+    const todayStoreLines = storeStats
+        .filter((item) => Number(item.stats.todayReservations || 0) > 0)
+        .map((item) => `- *${item.name}:* ${item.stats.todayReservations}`);
+    const upcomingStoreLines = storeStats
+        .filter((item) => Number(item.stats.upcomingReservations || 0) > 0)
+        .map((item) => `- *${item.name}:* ${item.stats.upcomingReservations}`);
     const lines = [
         '*Resumo Geral de Reservas*',
-        `*Hoje:* ${stats.todayReservations}`,
-        `*Total confirmadas:* ${stats.confirmedReservations}`,
         '',
-        '*Por unidade*',
-        ...(storeLines.length > 0 ? storeLines : ['_Sem dados por unidade no momento._'])
+        '*Hoje*',
+        `*Total geral:* ${globalStats.todayReservations}`,
+        ...(todayStoreLines.length > 0 ? todayStoreLines : ['_Nenhuma reserva para hoje no momento._']),
+        '',
+        '*Próximos dias*',
+        `*Total geral:* ${globalStats.upcomingReservations}`,
+        ...(upcomingStoreLines.length > 0 ? upcomingStoreLines : ['_Nenhuma reserva futura no momento._'])
     ];
     await sendWhatsAppText(to, lines.join('\n'));
 }
@@ -2749,13 +3055,41 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '');
     const normalizedIntent = normalizeIntentText(text);
+    const parsedReservationInput = parseReservationDetails(text);
+    const hasReservationPayloadInText = parsedReservationInput.people !== undefined ||
+        parsedReservationInput.kids !== undefined ||
+        !!parsedReservationInput.date_text ||
+        !!parsedReservationInput.time_text ||
+        !!parsedReservationInput.notes;
     const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
     const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
     const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
+    const isOfferAcceptance = isGenericAck ||
+        /^(sim quero|sim quero fazer|sim quero reservar|quero|quero fazer|quero reservar|vamos|bora|claro|com certeza|por favor|pode deixar|pode deixar por favor|deixa por favor|pode sim)$/.test(normalizedIntent);
+    const isOfferRejection = /^(nao|não|nao obrigado|não obrigado|deixa|deixa pra la|deixa pra lá|agora nao|agora não)$/.test(normalizedIntent);
     const isBirthdayCakeQuestion = /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
         /\b(pode|permitid|autoriz|levar|trazer)\b/.test(normalizedNoAccent);
+    const isCakeNoteStatement = /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
+        (/\b(vou|vamos|iremos|levarei|levaremos|trarei|traremos|anota|anotar|observa|obs)\b/.test(normalizedNoAccent) ||
+            /\b(levar|trazer)\b/.test(normalizedNoAccent)) &&
+        !/\b(posso|pode|permitid|autoriz)\b/.test(normalizedNoAccent);
     const isCorkageQuestion = /\b(rolha|vinho|bebida(?:s)?\s+de\s+casa|bebida\s+de\s+fora)\b/.test(normalizedNoAccent) &&
         /\b(pode|permitid|autoriz|levar|trazer|tem|custa|cobra|taxa)\b/.test(normalizedNoAccent);
+    const isHappyHourQuestion = /\bhappy\s*hour\b/.test(normalizedNoAccent) ||
+        (/\b(desconto|promoc[aã]o|promocoes|promo[cç][aã]o)\b/.test(normalizedNoAccent) &&
+            /\b(16h|20h|segunda|sexta|dias|horario|horarios)\b/.test(normalizedNoAccent));
+    const isPetFriendlyQuestion = /\bpet\s*friend(?:ly)?\b/.test(normalizedNoAccent) ||
+        (/\b(pet|pets|cachorro|cachorros|cao|caes|c[aã]o|c[aã]es|dog|dogs)\b/.test(normalizedNoAccent) &&
+            /\b(aceita|aceitam|permit|permitido|permitida|pode|podem|entrar|levar|ir|fica|ficar|tem)\b/.test(normalizedNoAccent));
+    const isCardapioIntent = /\b(cardapio|cardápio)\b/.test(normalizedNoAccent) ||
+        (/\bmenu\b/.test(normalizedNoAccent) && /\bcomida|almoco|almoço|jantar|pratos?\b/.test(normalizedNoAccent));
+    const isDeliveryIntent = /\b(delivery|entrega|ifood)\b/.test(normalizedNoAccent) ||
+        (/\b(pedir|pedido)\b/.test(normalizedNoAccent) && /\b(entrega|delivery|ifood)\b/.test(normalizedNoAccent));
+    const mentionedUnit = getMentionedUnitFromText(text);
+    const contactTargetUnit = mentionedUnit?.name || state.preferred_unit_name || '';
+    const isUnitContactQuestion = !!contactTargetUnit &&
+        /\b(falar|contato|telefone|whatsapp|numero|n[uú]mero|ligar|chamar)\b/.test(normalizedNoAccent) &&
+        /\b(unidade|loja|restaurante|cabral|batel|portao|londrina|sao paulo|agua verde|botanico)\b/.test(normalizedNoAccent);
     const isReservationIntent = /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
         normalized.includes('quero reservar') ||
         normalized.includes('fazer reserva') ||
@@ -2766,8 +3100,21 @@ async function handleDeterministicCommand(text, from, state, profileName) {
     const isCancelIntent = /\b(cancel(a|ar|amento)|desmarc(a|ar)|excluir reserva|nao vou poder ir|não vou poder ir)\b/.test(normalized);
     const isCancelAllIntent = /\b(cancel(a|ar).*(todas|tudo)|todas as reservas|cancelar tudo)\b/.test(normalized);
     const isAlterIntent = /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva|trocar|troca|outro dia|nova data|tenho que alterar|preciso alterar|vamos alterar|quero trocar)\b/.test(normalized);
-    const isReservationQueryIntent = /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
+    const isReservationQueryIntent = !isAlterIntent &&
+        !isCancelIntent &&
+        /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
     const isHoursIntent = /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
+    const looksLikeReservationDateOrTimeInput = !!parsedReservationInput.date_text ||
+        !!parsedReservationInput.time_text ||
+        /\bdata\b/.test(normalizedNoAccent) ||
+        /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalizedNoAccent) ||
+        /\b\d{1,2}(?::|h)\d{2}\s*h?\b/.test(normalizedNoAccent) ||
+        /\b\d{1,2}\s*(h|hora|horas)\b/.test(normalizedNoAccent);
+    const shouldHandleAsStoreHours = isHoursIntent &&
+        !(isInActiveFlow(state) &&
+            (hasReservationPayloadInText ||
+                looksLikeReservationDateOrTimeInput ||
+                /\b(reserva|adult|crianc|mesa|almoco|almoço|evento|atras|variar|aprox|mais ou menos)\b/.test(normalizedNoAccent)));
     const timeOnlyPattern = /\bhoje\b/.test(normalized) &&
         /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
         !/\b\d+\s*(pessoa|pessoas|adulto|adultos)\b/.test(normalized);
@@ -2787,14 +3134,107 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         await sendMainMenu(from, false);
         return true;
     }
-    if (isBirthdayCakeQuestion) {
+    if (isBirthdayCakeQuestion && !isCakeNoteStatement) {
         const unit = state.preferred_unit_name ? ` da unidade ${state.preferred_unit_name}` : '';
+        state.pending_offer = 'cake_note_offer';
+        userStates.set(from, state);
         await sendWhatsAppText(from, `Sim! 🎂 Pode levar bolo de aniversário${unit}. Se quiser, já deixo essa observação na reserva também. 😊`);
         return true;
     }
     if (isCorkageQuestion) {
         const unit = state.preferred_unit_name ? ` na unidade ${state.preferred_unit_name}` : '';
         await sendWhatsAppText(from, `Sim! 🍷 Trabalhamos com rolha liberada${unit}, sem custo. Pode trazer vinho ou bebida de casa sem taxa. 😊`);
+        return true;
+    }
+    if (isHappyHourQuestion) {
+        state.pending_offer = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, HAPPY_HOUR_INFO_TEXT);
+        return true;
+    }
+    if (isPetFriendlyQuestion) {
+        state.pending_offer = 'pet_friendly_reservation_offer';
+        userStates.set(from, state);
+        await sendWhatsAppText(from, PET_FRIENDLY_INFO_TEXT);
+        return true;
+    }
+    if (isUnitContactQuestion) {
+        const unitPhone = UNIT_PHONE_BY_NAME[contactTargetUnit];
+        if (unitPhone) {
+            state.pending_offer = undefined;
+            state.reservation = undefined;
+            state.preferred_store_id = undefined;
+            state.preferred_unit_name = undefined;
+            userStates.set(from, state);
+            await sendWhatsAppText(from, `Claro! O contato da unidade *${contactTargetUnit}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com a reserva por aqui. 😊`);
+            return true;
+        }
+    }
+    if (state.pending_offer === 'pet_friendly_reservation_offer') {
+        if (isOfferAcceptance || isReservationIntent) {
+            const currentPhone = state.reservation?.contact_phone;
+            state.pending_offer = undefined;
+            state.preferred_unit_name = UNIT_CONFIG.unidade_agua_verde.name;
+            state.preferred_store_id = UNIT_CONFIG.unidade_agua_verde.storeId;
+            state.reservation = currentPhone ? { contact_phone: currentPhone, phone_confirmed: false } : { phone_confirmed: false };
+            userStates.set(from, state);
+            await sendWhatsAppText(from, 'Perfeito! Vou seguir com a reserva para a unidade Água Verde. ✅');
+            await sendPhoneConfirmation(from);
+            return true;
+        }
+        if (isOfferRejection || isThanks) {
+            state.pending_offer = undefined;
+            userStates.set(from, state);
+            await sendWhatsAppText(from, 'Sem problemas 😊 Se quiser, posso te ajudar com reserva, cardápio ou delivery.');
+            return true;
+        }
+    }
+    if (state.pending_offer === 'cake_note_offer') {
+        if (isOfferAcceptance) {
+            state.pending_offer = undefined;
+            userStates.set(from, state);
+            const active = await fetchActiveReservationsWithRetry(from);
+            if (active.length === 0) {
+                await sendWhatsAppText(from, 'Perfeito 😊 Se sua reserva foi confirmada manualmente e eu não conseguir localizar por aqui, me manda o código da reserva ou peça para a equipe adicionar a observação: levará bolo de aniversário.');
+                return true;
+            }
+            if (active.length === 1) {
+                await beginAlterReservationFlow(from, state, active[0], 'Obs: levará bolo de aniversário');
+                return true;
+            }
+            await sendWhatsAppText(from, 'Perfeito! Encontrei mais de uma reserva ativa. Me diga qual delas você quer atualizar com a observação do bolo.');
+            await sendManageReservationMenu(from, 'alter', active);
+            return true;
+        }
+        if (isOfferRejection || isThanks) {
+            state.pending_offer = undefined;
+            userStates.set(from, state);
+            await sendWhatsAppText(from, 'Sem problemas 😊');
+            return true;
+        }
+    }
+    if (isInActiveFlow(state) && (isCardapioIntent || isDeliveryIntent)) {
+        const unitName = mentionedUnit?.name || state.preferred_unit_name;
+        const city = state.preferred_city || inferCityFromUnitName(unitName);
+        state.reservation = undefined;
+        state.preferred_store_id = undefined;
+        state.preferred_unit_name = undefined;
+        state.pending_offer = undefined;
+        if (city)
+            state.preferred_city = city;
+        userStates.set(from, state);
+        if (isCardapioIntent) {
+            const cardapioCommand = getCardapioCommandFromContext(unitName, city);
+            if (cardapioCommand) {
+                const msg = await buildCardapioMessage(cardapioCommand);
+                await sendWhatsAppText(from, unitName ? `${msg}\n\nPara a unidade ${unitName}, este é o cardápio correspondente. 😊` : msg);
+            }
+            else {
+                await sendCitiesMenu(from);
+            }
+            return true;
+        }
+        await sendDirectDeliveryHelp(from, unitName, city);
         return true;
     }
     // Greeting outside active flow -> open main menu immediately
@@ -2811,7 +3251,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         });
         return true;
     }
-    if (isHoursIntent) {
+    if (shouldHandleAsStoreHours) {
         return await answerStoreHours(from, state, text);
     }
     // Natural language reservation intent -> traditional interactive flow
@@ -3181,6 +3621,20 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         return true;
     }
     if (text === 'confirm_reserva_nao') {
+        if (!isInActiveFlow(state)) {
+            const active = await fetchActiveReservationsWithRetry(from);
+            if (active.length === 1) {
+                await beginAlterReservationFlow(from, state, active[0]);
+                return true;
+            }
+            if (active.length > 1) {
+                await sendWhatsAppText(from, 'Sem problemas! 😊 Qual reserva você quer alterar?');
+                await sendManageReservationMenu(from, 'alter', active);
+                return true;
+            }
+            await sendWhatsAppText(from, 'Não encontrei uma reserva ativa para alterar agora. Se quiser, posso te ajudar a consultar ou fazer uma nova reserva.');
+            return true;
+        }
         if (state.reservation)
             state.reservation.awaiting_confirmation = false;
         userStates.set(from, state);
@@ -3202,6 +3656,7 @@ async function handleDeterministicCommand(text, from, state, profileName) {
     }
     if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
         const extracted = parseReservationDetails(text);
+        const extractedName = extractExplicitNameUpdate(text, { allowBareName: !state.reservation?.name || state.reservation?.name === '❓ Pendente' });
         let deltaAppliedMessage = null;
         if (state.reservation) {
             const deltas = extractPartyDeltas(text);
@@ -3227,6 +3682,13 @@ async function handleDeterministicCommand(text, from, state, profileName) {
             const onlyPeople = extractStandalonePeople(text);
             if (onlyPeople)
                 extracted.people = onlyPeople;
+        }
+        if (extractedName) {
+            extracted.name = extractedName;
+        }
+        else if (/^(?:alterar\s+o\s+)?nome\s*[:\-]?\s*$/i.test(String(text || '').trim())) {
+            await sendWhatsAppText(from, 'Perfeito! Me manda o nome completo exatamente como quer deixar na reserva.');
+            return true;
         }
         if (Object.keys(extracted).length > 0) {
             state.reservation = { ...(state.reservation || {}), ...extracted };

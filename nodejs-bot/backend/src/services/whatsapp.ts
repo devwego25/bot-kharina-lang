@@ -753,7 +753,7 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   } else if (/\bmeia\s*noite\b/.test(tNoAccent)) {
     hh = '00';
   }
-  const hm = tNoAccent.match(/\b(\d{1,2})[:h](\d{2})\b/);
+  const hm = tNoAccent.match(/\b(\d{1,2})(?::|h)(\d{2})\s*h?\b/);
   if (!hh && hm) {
     hh = hm[1];
     mm = hm[2];
@@ -802,6 +802,34 @@ function extractStandalonePeople(text: string): number | null {
   const n = parsePtNumberToken(m[1]);
   if (n === null || n <= 0 || n > 30) return null;
   return n;
+}
+
+function extractExplicitNameUpdate(text: string, opts?: { allowBareName?: boolean }): string | null {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return null;
+
+  const explicit = raw.match(/^(?:alterar\s+o\s+)?nome\s*[:\-]?\s*(.+)$/i);
+  if (explicit) {
+    const candidate = explicit[1].trim();
+    if (
+      candidate &&
+      candidate.length >= 3 &&
+      !/\b(data|horario|horário|adult|crianc|reserva|mesa|bolo|observa|telefone)\b/i.test(candidate)
+    ) {
+      return candidate;
+    }
+  }
+
+  if (!opts?.allowBareName) return null;
+  if (/\d/.test(raw)) return null;
+  if (/[!?]/.test(raw)) return null;
+  if (/^(sim|nao|não|ok|menu|voltar|data|horario|horário|nome)$/i.test(raw)) return null;
+  if (/\b(data|horario|horário|adult|crianc|reserva|mesa|bolo|observa|telefone|unidade)\b/i.test(raw)) return null;
+
+  const words = raw.split(/\s+/).filter(Boolean);
+  if (words.length < 2 || words.length > 5) return null;
+  if (!words.every((word) => /^[A-Za-zÀ-ÿ'`-]+$/.test(word))) return null;
+  return raw;
 }
 
 function extractPartyDeltas(text: string): { adultsDelta: number; kidsDelta: number } | null {
@@ -1297,10 +1325,12 @@ type ActiveReservation = {
   code: string;
   storeId: string;
   storeName: string;
+  name?: string;
   date: string;
   time: string;
   people: number;
   kids?: number;
+  notes?: string;
   status: string;
 };
 
@@ -1362,10 +1392,12 @@ async function fetchActiveReservations(phoneRaw: string): Promise<ActiveReservat
       code: displayReservationCode({ id: x?.reservationId || x?.id, code: x?.code || x?.reservationCode || x?.confirmationCode }) || 'N/A',
       storeId: String(x?.storeId || ''),
       storeName: String(x?.storeName || x?.store || 'N/A'),
+      name: String(x?.name || x?.clientName || x?.customerName || '').trim() || undefined,
       date: String(x?.date || ''),
       time: normalizeTime(String(x?.time || '')),
       people: Number(x?.numberOfPeople ?? x?.people ?? 0),
       kids: x?.kids !== undefined && x?.kids !== null ? Number(x.kids) : undefined,
+      notes: String(x?.notes || x?.occasion || '').trim() || undefined,
       status: statusLabel(x?.status)
     }))
     .filter((x: ActiveReservation) => x.reservationId);
@@ -1437,10 +1469,12 @@ async function searchReservationsAdminFallback(phoneRaw: string): Promise<Active
           code: displayReservationCode({ id: item.id }) || 'N/A',
           storeId: String(item.storeId || item.store?.id || ''),
           storeName: String(item.store?.name || 'N/A'),
+          name: String(item.customerName || '').trim() || undefined,
           date: String(item.date || ''),
           time: normalizeTime(String(item.time || '')),
           people: Number(item.guests || 0) + Number(item.kids || 0),
           kids: item.kids !== undefined && item.kids !== null ? Number(item.kids) : undefined,
+          notes: String(item.notes || '').trim() || undefined,
           status: statusLabel(item.status),
         });
       }
@@ -1542,12 +1576,14 @@ async function beginAlterReservationFlow(
     ...(state.reservation || {}),
     phone_confirmed: true,
     contact_phone: from,
+    name: selected.name || state.reservation?.name,
     date_text: selected.date || state.reservation?.date_text,
     time_text: selected.time || state.reservation?.time_text,
     kids: selected.kids ?? state.reservation?.kids,
     people: selected.kids !== undefined
       ? Math.max(0, selected.people - Number(selected.kids || 0))
       : (state.reservation?.people ?? selected.people),
+    notes: selected.notes || state.reservation?.notes,
     pending_change_source_id: selected.reservationId,
     pending_change_source_code: selected.code,
     awaiting_confirmation: false
@@ -1567,6 +1603,10 @@ async function beginAlterReservationFlow(
     }
     if (Object.keys(extracted).length > 0) {
       state.reservation = { ...(state.reservation || {}), ...extracted };
+    }
+    const extractedName = extractExplicitNameUpdate(incoming, { allowBareName: !state.reservation?.name });
+    if (extractedName) {
+      state.reservation = { ...(state.reservation || {}), name: extractedName };
     }
   }
 
@@ -3503,6 +3543,13 @@ async function handleDeterministicCommand(
   const isBirthdayCakeQuestion =
     /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
     /\b(pode|permitid|autoriz|levar|trazer)\b/.test(normalizedNoAccent);
+  const isCakeNoteStatement =
+    /\b(bolo|aniversa(?:rio|́rio))\b/.test(normalizedNoAccent) &&
+    (
+      /\b(vou|vamos|iremos|levarei|levaremos|trarei|traremos|anota|anotar|observa|obs)\b/.test(normalizedNoAccent) ||
+      /\b(levar|trazer)\b/.test(normalizedNoAccent)
+    ) &&
+    !/\b(posso|pode|permitid|autoriz)\b/.test(normalizedNoAccent);
   const isCorkageQuestion =
     /\b(rolha|vinho|bebida(?:s)?\s+de\s+casa|bebida\s+de\s+fora)\b/.test(normalizedNoAccent) &&
     /\b(pode|permitid|autoriz|levar|trazer|tem|custa|cobra|taxa)\b/.test(normalizedNoAccent);
@@ -3552,12 +3599,20 @@ async function handleDeterministicCommand(
     /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
   const isHoursIntent =
     /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
+  const looksLikeReservationDateOrTimeInput =
+    !!parsedReservationInput.date_text ||
+    !!parsedReservationInput.time_text ||
+    /\bdata\b/.test(normalizedNoAccent) ||
+    /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalizedNoAccent) ||
+    /\b\d{1,2}(?::|h)\d{2}\s*h?\b/.test(normalizedNoAccent) ||
+    /\b\d{1,2}\s*(h|hora|horas)\b/.test(normalizedNoAccent);
   const shouldHandleAsStoreHours =
     isHoursIntent &&
     !(
       isInActiveFlow(state) &&
       (
         hasReservationPayloadInText ||
+        looksLikeReservationDateOrTimeInput ||
         /\b(reserva|adult|crianc|mesa|almoco|almoço|evento|atras|variar|aprox|mais ou menos)\b/.test(normalizedNoAccent)
       )
     );
@@ -3584,7 +3639,7 @@ async function handleDeterministicCommand(
     return true;
   }
 
-  if (isBirthdayCakeQuestion) {
+  if (isBirthdayCakeQuestion && !isCakeNoteStatement) {
     const unit = state.preferred_unit_name ? ` da unidade ${state.preferred_unit_name}` : '';
     state.pending_offer = 'cake_note_offer';
     userStates.set(from, state);
@@ -4165,6 +4220,10 @@ async function handleDeterministicCommand(
 
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
     const extracted = parseReservationDetails(text);
+    const extractedName = extractExplicitNameUpdate(
+      text,
+      { allowBareName: !state.reservation?.name || state.reservation?.name === '❓ Pendente' }
+    );
     let deltaAppliedMessage: string | null = null;
     if (state.reservation) {
       const deltas = extractPartyDeltas(text);
@@ -4187,6 +4246,12 @@ async function handleDeterministicCommand(
     if (!extracted.people && !state.reservation?.people) {
       const onlyPeople = extractStandalonePeople(text);
       if (onlyPeople) extracted.people = onlyPeople;
+    }
+    if (extractedName) {
+      extracted.name = extractedName;
+    } else if (/^(?:alterar\s+o\s+)?nome\s*[:\-]?\s*$/i.test(String(text || '').trim())) {
+      await sendWhatsAppText(from, 'Perfeito! Me manda o nome completo exatamente como quer deixar na reserva.');
+      return true;
     }
     if (Object.keys(extracted).length > 0) {
       state.reservation = { ...(state.reservation || {}), ...extracted };

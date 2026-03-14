@@ -85,5 +85,11 @@ class ReservasAdminApiService {
     async listReservations(input) {
         return this.request('GET', '/admin/reservations', input);
     }
+    async searchReservations(search, input) {
+        return this.request('GET', '/admin/reservations', {
+            search,
+            ...(input || {})
+        });
+    }
 }
 exports.reservasAdminApiService = new ReservasAdminApiService();
