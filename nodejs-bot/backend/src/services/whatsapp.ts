@@ -454,6 +454,15 @@ function extractPhoneCandidate(text: string): string | null {
   return null;
 }
 
+function getMentionedUnitFromText(text: string): { name: string; storeId: string } | null {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const match = UNIT_TEXT_MATCHERS.find((unit) => unit.rx.test(normalized));
+  return match ? UNIT_CONFIG[match.id] : null;
+}
+
 function hasCompleteReservationData(reservation?: ReservationState): boolean {
   return !!reservation?.people &&
     !!reservation?.date_text &&
@@ -3317,6 +3326,12 @@ async function handleDeterministicCommand(
       /\b(pet|pets|cachorro|cachorros|cao|caes|c[aã]o|c[aã]es|dog|dogs)\b/.test(normalizedNoAccent) &&
       /\b(aceita|aceitam|permit|permitido|permitida|pode|podem|entrar|levar|ir|fica|ficar|tem)\b/.test(normalizedNoAccent)
     );
+  const mentionedUnit = getMentionedUnitFromText(text);
+  const contactTargetUnit = mentionedUnit?.name || state.preferred_unit_name || '';
+  const isUnitContactQuestion =
+    !!contactTargetUnit &&
+    /\b(falar|contato|telefone|whatsapp|numero|n[uú]mero|ligar|chamar)\b/.test(normalizedNoAccent) &&
+    /\b(unidade|loja|restaurante|cabral|batel|portao|londrina|sao paulo|agua verde|botanico)\b/.test(normalizedNoAccent);
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
@@ -3390,6 +3405,22 @@ async function handleDeterministicCommand(
     userStates.set(from, state);
     await sendWhatsAppText(from, PET_FRIENDLY_INFO_TEXT);
     return true;
+  }
+
+  if (isUnitContactQuestion) {
+    const unitPhone = UNIT_PHONE_BY_NAME[contactTargetUnit];
+    if (unitPhone) {
+      state.pending_offer = undefined;
+      state.reservation = undefined;
+      state.preferred_store_id = undefined;
+      state.preferred_unit_name = undefined;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Claro! O contato da unidade *${contactTargetUnit}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com a reserva por aqui. 😊`
+      );
+      return true;
+    }
   }
 
   if (state.pending_offer === 'pet_friendly_reservation_offer') {
