@@ -942,8 +942,16 @@ function toDigitsPhone(raw: string): string {
   return String(raw || '').replace(/\D/g, '');
 }
 
-function getPhoneLookupVariants(raw: string): string[] {
+function normalizeReservationPhone(raw: string): string {
   const digits = toDigitsPhone(raw);
+  if (!digits) return '';
+  if (digits.startsWith('55')) return digits;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  return digits;
+}
+
+function getPhoneLookupVariants(raw: string): string[] {
+  const digits = normalizeReservationPhone(raw);
   if (!digits) return [];
 
   const local = digits.startsWith('55') ? digits.slice(2) : digits;
@@ -1555,7 +1563,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
   const r = state.reservation || {};
   const storeId = state.preferred_store_id;
   const unitName = state.preferred_unit_name || 'unidade selecionada';
-  const phone = toDigitsPhone(r.contact_phone || from);
+  const phone = normalizeReservationPhone(r.contact_phone || from);
   const date = normalizeIsoDate(r.date_text || '');
   const time = normalizeTime(r.time_text || '');
   const adults = Number(r.people || 0);
