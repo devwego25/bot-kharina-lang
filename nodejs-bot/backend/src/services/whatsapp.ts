@@ -310,25 +310,110 @@ function clearAdminReservationState(state: UserState): void {
   delete state.admin.reservation_end_date;
 }
 
-function buildReservationBlockCustomerMessage(
+function timeToMinutes(value?: string): number | null {
+  const normalized = normalizeTime(String(value || '').trim());
+  const match = normalized.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function minutesToTime(totalMinutes: number): string {
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function reservationWeekdayFromIso(date: string): number | null {
+  const match = String(date || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.getDay();
+}
+
+function weekdayKeyFromIso(date: string): string | null {
+  const weekday = reservationWeekdayFromIso(date);
+  if (weekday === null) return null;
+  const map = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  return map[weekday] || null;
+}
+
+async function suggestReservationAlternativeTimes(
+  storeId: string,
+  unitName: string,
+  date: string,
+  requestedTime: string
+): Promise<string[]> {
+  const weekday = reservationWeekdayFromIso(date);
+  const weekdayKey = weekdayKeyFromIso(date);
+  if (!weekdayKey) return [];
+
+  const stores = await getStoresWithHours();
+  const store = stores.find((s: any) => String(s?.id || '').toLowerCase() === String(storeId).toLowerCase());
+  const dayInfo = store?.operationHours?.[weekdayKey];
+  const openMinutes = timeToMinutes(dayInfo?.open);
+  const closeMinutes = timeToMinutes(dayInfo?.close);
+  if (!store || !dayInfo || dayInfo.isOpen === false || openMinutes === null || closeMinutes === null || openMinutes >= closeMinutes) {
+    return [];
+  }
+
+  const requestedMinutes = timeToMinutes(requestedTime) ?? openMinutes;
+  const blocks = (await listReservationBlocks(true, 500)).filter((item) =>
+    item.store_id === storeId && (item.weekday === null || item.weekday === weekday)
+  );
+  const blockRanges = blocks
+    .map((item) => ({ start: timeToMinutes(item.start_time), end: timeToMinutes(item.end_time) }))
+    .filter((item): item is { start: number; end: number } => item.start !== null && item.end !== null && item.start < item.end);
+
+  const candidates: number[] = [];
+  for (let minutes = openMinutes; minutes < closeMinutes; minutes += 30) {
+    const time = minutesToTime(minutes);
+    if (getReservationLeadTimeViolation(date, time, unitName)) continue;
+    const blocked = blockRanges.some((range) => range.start <= minutes && range.end > minutes);
+    if (blocked) continue;
+    candidates.push(minutes);
+  }
+
+  const picked = candidates
+    .sort((a, b) => {
+      const diff = Math.abs(a - requestedMinutes) - Math.abs(b - requestedMinutes);
+      if (diff !== 0) return diff;
+      return a - b;
+    })
+    .slice(0, 4)
+    .sort((a, b) => a - b)
+    .map((minutes) => minutesToTime(minutes));
+
+  return Array.from(new Set(picked));
+}
+
+async function buildReservationBlockCustomerMessage(
   block: ReservationBlock,
+  storeId?: string,
   unitName?: string,
   requestedDate?: string,
   requestedTime?: string
-): string {
+): Promise<string> {
   const unitLabel = unitName || block.store_name || 'essa unidade';
   const base = `A reserva para a unidade ${unitLabel} nesse dia e horário está bloqueada, então o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
+  const alternativeTimes =
+    storeId && requestedDate && requestedTime
+      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime))
+      : [];
+  const alternativesText = alternativeTimes.length > 0
+    ? `\n\nAlguns horários fora desse bloqueio para você tentar nessa unidade: *${alternativeTimes.join('*, *')}*.`
+    : '';
   if (block.mode === 'suggest_alternative') {
-    return `${base}\n\nSe quiser, me diga outro horário ou outra unidade e eu verifico por aqui.`;
+    return `${base}${alternativesText}\n\nSe quiser, me diga outro horário ou outra unidade e eu verifico por aqui.`;
   }
   if (block.mode === 'handoff') {
     const phone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
     if (phone) {
-      return `${base}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você. Se preferir falar direto com a unidade, o telefone é ${phone}.`;
+      return `${base}${alternativesText}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você. Se preferir falar direto com a unidade, o telefone é ${phone}.`;
     }
-    return `${base}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
+    return `${base}${alternativesText}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
   }
-  return `${base}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
+  return `${base}${alternativesText}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
 }
 
 function buildReservationDateTime(date: string, time: string): Date | null {
@@ -1794,7 +1879,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     userStates.set(from, state);
     return {
       ok: false,
-      message: buildReservationBlockCustomerMessage(block, unitName, date, time)
+      message: await buildReservationBlockCustomerMessage(block, storeId, unitName, date, time)
     };
   }
 
@@ -3011,8 +3096,9 @@ async function sendReservationConfirmationOrBlock(to: string, state: UserState):
   userStates.set(to, state);
   await sendWhatsAppText(
     to,
-    buildReservationBlockCustomerMessage(
+    await buildReservationBlockCustomerMessage(
       block,
+      state.preferred_store_id,
       state.preferred_unit_name,
       state.reservation?.date_text,
       state.reservation?.time_text
@@ -3699,6 +3785,10 @@ async function handleDeterministicCommand(
     /\btem\s+(a\s+)?reserva\b/.test(normalizedNoAccent);
   const isHoursIntent =
     /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
+  const isAlternativeTimeRequest =
+    /\b(outro|outra|alternativ)\b/.test(normalizedNoAccent) &&
+    /\b(horario|horarios|hora|horas)\b/.test(normalizedNoAccent) ||
+    /\b(horarios?|hora)\s+(disponiveis|disponivel|livres?)\b/.test(normalizedNoAccent);
   const looksLikeReservationDateOrTimeInput =
     !!parsedReservationInput.date_text ||
     !!parsedReservationInput.time_text ||
@@ -3922,6 +4012,25 @@ async function handleDeterministicCommand(
       console.error('[WhatsApp] Thanks sticker async failed:', err?.message || err);
     });
     return true;
+  }
+
+  if (isInActiveFlow(state) && isAlternativeTimeRequest) {
+    const block = await maybeGetReservationBlock(state);
+    if (block) {
+      if (state.reservation) state.reservation.awaiting_confirmation = false;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        await buildReservationBlockCustomerMessage(
+          block,
+          state.preferred_store_id,
+          state.preferred_unit_name,
+          state.reservation?.date_text,
+          state.reservation?.time_text
+        )
+      );
+      return true;
+    }
   }
 
   if (shouldHandleAsStoreHours) {
