@@ -642,6 +642,8 @@ function parseReservationDetails(text) {
     }
     const noteMarkers = [
         'obs', 'observa', 'anivers', 'janela', 'parquinho', 'perto do parquinho',
+        'parte de baixo', 'andar de baixo', 'parte de cima', 'andar de cima',
+        'docinho', 'docinhos', 'mesa embaixo', 'mesa em baixo', 'mesa em cima',
         'cadeira de bebe', 'cadeirinha', 'cadeirante', 'acessivel', 'acessível',
         'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar',
         'evento', 'atras', 'atrasar', 'varia', 'aprox', 'aproxim', 'juntar as mesas'
@@ -3103,6 +3105,10 @@ async function handleDeterministicCommand(text, from, state, profileName) {
     const isReservationQueryIntent = !isAlterIntent &&
         !isCancelIntent &&
         /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
+    const isExistingReservationLookupIntent = isReservationQueryIntent ||
+        /\b(ja|já)\s+tenho\s+uma?\s+reserva\b/.test(normalizedNoAccent) ||
+        /\b(confere|confirma|confirmar|verifica|verificar|checa|checar)\b.*\b(reserva|ela|se)\b/.test(normalizedNoAccent) ||
+        /\btem\s+(a\s+)?reserva\b/.test(normalizedNoAccent);
     const isHoursIntent = /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
     const looksLikeReservationDateOrTimeInput = !!parsedReservationInput.date_text ||
         !!parsedReservationInput.time_text ||
@@ -3118,6 +3124,9 @@ async function handleDeterministicCommand(text, from, state, profileName) {
     const timeOnlyPattern = /\bhoje\b/.test(normalized) &&
         /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
         !/\b\d+\s*(pessoa|pessoas|adulto|adultos)\b/.test(normalized);
+    const isReservationObservationIntent = !!parsedReservationInput.notes ||
+        isCakeNoteStatement ||
+        /\b(parte de baixo|andar de baixo|parte de cima|andar de cima|docinho|docinhos|janela|parquinho|juntar as mesas)\b/.test(normalizedNoAccent);
     // If waiting final confirmation, keep user inside confirmation state.
     if (state.reservation?.awaiting_confirmation && text !== 'confirm_reserva_sim' && text !== 'confirm_reserva_nao') {
         if (isGreeting || isThanks || isGenericAck || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
@@ -3190,16 +3199,17 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         }
     }
     if (state.pending_offer === 'cake_note_offer') {
-        if (isOfferAcceptance) {
+        if (isOfferAcceptance || isReservationObservationIntent) {
             state.pending_offer = undefined;
             userStates.set(from, state);
             const active = await fetchActiveReservationsWithRetry(from);
+            const noteText = parsedReservationInput.notes || (isCakeNoteStatement ? String(text || '').trim() : 'Obs: levará bolo de aniversário');
             if (active.length === 0) {
                 await sendWhatsAppText(from, 'Perfeito 😊 Se sua reserva foi confirmada manualmente e eu não conseguir localizar por aqui, me manda o código da reserva ou peça para a equipe adicionar a observação: levará bolo de aniversário.');
                 return true;
             }
             if (active.length === 1) {
-                await beginAlterReservationFlow(from, state, active[0], 'Obs: levará bolo de aniversário');
+                await beginAlterReservationFlow(from, state, active[0], noteText);
                 return true;
             }
             await sendWhatsAppText(from, 'Perfeito! Encontrei mais de uma reserva ativa. Me diga qual delas você quer atualizar com a observação do bolo.');
@@ -3210,6 +3220,45 @@ async function handleDeterministicCommand(text, from, state, profileName) {
             state.pending_offer = undefined;
             userStates.set(from, state);
             await sendWhatsAppText(from, 'Sem problemas 😊');
+            return true;
+        }
+    }
+    if (isExistingReservationLookupIntent) {
+        state.pending_offer = undefined;
+        state.reservation = undefined;
+        state.preferred_store_id = undefined;
+        state.preferred_unit_name = undefined;
+        userStates.set(from, state);
+        const q = await queryReservationsDeterministic(from);
+        await sendWhatsAppText(from, q.message);
+        return true;
+    }
+    if (isReservationObservationIntent && !isInActiveFlow(state)) {
+        const active = await fetchActiveReservationsWithRetry(from);
+        if (active.length === 1) {
+            await beginAlterReservationFlow(from, state, active[0], parsedReservationInput.notes || String(text || '').trim());
+            return true;
+        }
+        if (active.length > 1) {
+            await sendWhatsAppText(from, 'Encontrei mais de uma reserva ativa. Me diga qual delas você quer atualizar com essa observação.');
+            await sendManageReservationMenu(from, 'alter', active);
+            return true;
+        }
+    }
+    if (isReservationObservationIntent && isInActiveFlow(state) && !hasCompleteReservationData(state.reservation)) {
+        const active = await fetchActiveReservationsWithRetry(from);
+        if (active.length === 1) {
+            state.pending_offer = undefined;
+            state.reservation = undefined;
+            state.preferred_store_id = undefined;
+            state.preferred_unit_name = undefined;
+            userStates.set(from, state);
+            await beginAlterReservationFlow(from, state, active[0], parsedReservationInput.notes || String(text || '').trim());
+            return true;
+        }
+        if (active.length > 1) {
+            await sendWhatsAppText(from, 'Encontrei mais de uma reserva ativa. Me diga qual delas você quer atualizar com essa observação.');
+            await sendManageReservationMenu(from, 'alter', active);
             return true;
         }
     }
@@ -3614,8 +3663,18 @@ async function handleDeterministicCommand(text, from, state, profileName) {
         await sendWhatsAppText(from, done.message);
         if (!done.ok) {
             const suggestWait = done.message.toLowerCase().includes('alguns minutos');
-            if (!suggestWait) {
+            const hasRecoverableDraft = hasCompleteReservationData(state.reservation);
+            if (!suggestWait && hasRecoverableDraft) {
                 await sendReservationConfirmationOrBlock(from, state);
+            }
+            else if (!suggestWait && !hasRecoverableDraft) {
+                const active = await fetchActiveReservationsWithRetry(from);
+                if (active.length > 0) {
+                    await sendWhatsAppText(from, formatActiveReservationsMessage(active));
+                }
+                else {
+                    await sendWhatsAppText(from, 'Perdi o contexto desse resumo e não vou te mostrar um formulário vazio. Se quiser, me diga novamente unidade, data, horário e quantidade de pessoas para eu reabrir a reserva certinho.');
+                }
             }
         }
         return true;
