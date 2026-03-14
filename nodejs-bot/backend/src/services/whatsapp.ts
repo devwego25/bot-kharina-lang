@@ -636,37 +636,37 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   }
 
   const today = new Date();
-  if (/\bhoje\b/.test(tNoAccent)) {
-    updates.date_text = toIsoDate(today);
-  } else if (/\bamanh/.test(tNoAccent)) {
-    const d = new Date(today);
-    d.setDate(d.getDate() + 1);
-    updates.date_text = toIsoDate(d);
-  } else {
-    const weekdayMap: Array<{ rx: RegExp; day: number }> = [
-      { rx: /\b(domingo)\b/, day: 0 },
-      { rx: /\b(segunda|segunda-feira)\b/, day: 1 },
-      { rx: /\b(terca|terça|terca-feira|terça-feira)\b/, day: 2 },
-      { rx: /\b(quarta|quarta-feira)\b/, day: 3 },
-      { rx: /\b(quinta|quinta-feira)\b/, day: 4 },
-      { rx: /\b(sexta|sexta-feira)\b/, day: 5 },
-      { rx: /\b(sabado|sábado)\b/, day: 6 }
-    ];
-    const byWeekday = weekdayMap.find((w) => w.rx.test(tNoAccent));
-    if (byWeekday) {
-      updates.date_text = toIsoDate(nextWeekdayDate(byWeekday.day, today));
+  const dmY = tNoAccent.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (dmY) {
+    const day = parseInt(dmY[1], 10);
+    const mon = parseInt(dmY[2], 10);
+    let year = dmY[3] ? parseInt(dmY[3], 10) : today.getFullYear();
+    if (year < 100) year += 2000;
+    if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) {
+      updates.date_text = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
   }
 
   if (!updates.date_text) {
-    const dmY = tNoAccent.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
-    if (dmY) {
-      const day = parseInt(dmY[1], 10);
-      const mon = parseInt(dmY[2], 10);
-      let year = dmY[3] ? parseInt(dmY[3], 10) : today.getFullYear();
-      if (year < 100) year += 2000;
-      if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) {
-        updates.date_text = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    if (/\bhoje\b/.test(tNoAccent)) {
+      updates.date_text = toIsoDate(today);
+    } else if (/\bamanh/.test(tNoAccent)) {
+      const d = new Date(today);
+      d.setDate(d.getDate() + 1);
+      updates.date_text = toIsoDate(d);
+    } else {
+      const weekdayMap: Array<{ rx: RegExp; day: number }> = [
+        { rx: /\b(domingo)\b/, day: 0 },
+        { rx: /\b(segunda|segunda-feira)\b/, day: 1 },
+        { rx: /\b(terca|terça|terca-feira|terça-feira)\b/, day: 2 },
+        { rx: /\b(quarta|quarta-feira)\b/, day: 3 },
+        { rx: /\b(quinta|quinta-feira)\b/, day: 4 },
+        { rx: /\b(sexta|sexta-feira)\b/, day: 5 },
+        { rx: /\b(sabado|sábado)\b/, day: 6 }
+      ];
+      const byWeekday = weekdayMap.find((w) => w.rx.test(tNoAccent));
+      if (byWeekday) {
+        updates.date_text = toIsoDate(nextWeekdayDate(byWeekday.day, today));
       }
     }
   }
@@ -708,7 +708,8 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   const noteMarkers = [
     'obs', 'observa', 'anivers', 'janela', 'parquinho', 'perto do parquinho',
     'cadeira de bebe', 'cadeirinha', 'cadeirante', 'acessivel', 'acessível',
-    'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar'
+    'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar',
+    'evento', 'atras', 'atrasar', 'varia', 'aprox', 'aproxim', 'juntar as mesas'
   ];
   const hasNoteMarker = noteMarkers.some((m) => tNoAccent.includes(m));
   const onlyKidsAnswer = /^(\s*(sem crian|nao|nenhuma|0)\s*)+$/.test(tNoAccent);
@@ -3418,6 +3419,13 @@ async function handleDeterministicCommand(
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
   const normalizedIntent = normalizeIntentText(text);
+  const parsedReservationInput = parseReservationDetails(text);
+  const hasReservationPayloadInText =
+    parsedReservationInput.people !== undefined ||
+    parsedReservationInput.kids !== undefined ||
+    !!parsedReservationInput.date_text ||
+    !!parsedReservationInput.time_text ||
+    !!parsedReservationInput.notes;
   const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
   const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
@@ -3472,6 +3480,15 @@ async function handleDeterministicCommand(
     /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
   const isHoursIntent =
     /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
+  const shouldHandleAsStoreHours =
+    isHoursIntent &&
+    !(
+      isInActiveFlow(state) &&
+      (
+        hasReservationPayloadInText ||
+        /\b(reserva|adult|crianc|mesa|almoco|almoço|evento|atras|variar|aprox|mais ou menos)\b/.test(normalizedNoAccent)
+      )
+    );
   const timeOnlyPattern =
     /\bhoje\b/.test(normalized) &&
     /(\d{1,2})\s*(h|hora|horas|:\d{2})/.test(normalized) &&
@@ -3608,7 +3625,7 @@ async function handleDeterministicCommand(
     return true;
   }
 
-  if (isHoursIntent) {
+  if (shouldHandleAsStoreHours) {
     return await answerStoreHours(from, state, text);
   }
 
@@ -4015,6 +4032,20 @@ async function handleDeterministicCommand(
   }
 
   if (text === 'confirm_reserva_nao') {
+    if (!isInActiveFlow(state)) {
+      const active = await fetchActiveReservationsWithRetry(from);
+      if (active.length === 1) {
+        await beginAlterReservationFlow(from, state, active[0]);
+        return true;
+      }
+      if (active.length > 1) {
+        await sendWhatsAppText(from, 'Sem problemas! 😊 Qual reserva você quer alterar?');
+        await sendManageReservationMenu(from, 'alter', active);
+        return true;
+      }
+      await sendWhatsAppText(from, 'Não encontrei uma reserva ativa para alterar agora. Se quiser, posso te ajudar a consultar ou fazer uma nova reserva.');
+      return true;
+    }
     if (state.reservation) state.reservation.awaiting_confirmation = false;
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Sem problemas! 😊 Me diz o que você quer alterar (nome, data, horário, adultos ou crianças).');
