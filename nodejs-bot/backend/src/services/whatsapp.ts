@@ -3349,6 +3349,8 @@ async function handleDeterministicCommand(
   const isAlterIntent =
     /\b(alter(a|ar|ação|acao)|remarc(a|ar)|reagend(a|ar)|mudar reserva|trocar|troca|outro dia|nova data|tenho que alterar|preciso alterar|vamos alterar|quero trocar)\b/.test(normalized);
   const isReservationQueryIntent =
+    !isAlterIntent &&
+    !isCancelIntent &&
     /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|quais reservas)\b/.test(normalized);
   const isHoursIntent =
     /\b(horario|horarios|funcionamento|abre|aberto|fechamento|fecha|ate que horas|até que horas)\b/.test(normalizedNoAccent);
