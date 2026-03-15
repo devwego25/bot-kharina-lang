@@ -4117,7 +4117,11 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     state.preferred_city = city || state.preferred_city;
     userStates.set(from, state);
-    await sendDirectDeliveryHelp(from, mentionedUnit?.name, city);
+    if (city || mentionedUnit?.name) {
+      await sendDirectDeliveryHelp(from, mentionedUnit?.name, city);
+    } else {
+      await sendDeliveryCitiesMenu(from);
+    }
     return true;
   }
 
