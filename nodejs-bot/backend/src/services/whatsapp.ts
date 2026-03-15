@@ -3737,6 +3737,17 @@ async function handleDeterministicCommand(
   const isBirthdayDessertQuestion =
     /\b(sobremesa|doce|docinho|brinde)\b/.test(normalizedNoAccent) &&
     /\b(aniversariant|aniversario)\b/.test(normalizedNoAccent);
+  const isKidsAgeQuestion =
+    (
+      /\b(espaco kids|espaço kids|kids)\b/.test(normalizedNoAccent) ||
+      /\bbrincar\b/.test(normalizedNoAccent)
+    ) &&
+    (
+      /\bidade\b/.test(normalizedNoAccent) ||
+      /\b(\d{1,2})\s*anos?\b/.test(normalizedNoAccent) ||
+      /\bate que idade\b/.test(normalizedNoAccent) ||
+      /\bpode\b/.test(normalizedNoAccent)
+    );
   const isHappyHourQuestion =
     /\bhappy\s*hour\b/.test(normalizedNoAccent) ||
     (
@@ -3873,6 +3884,24 @@ async function handleDeterministicCommand(
     await sendWhatsAppText(
       from,
       'Essa informação pode variar conforme a unidade e a disponibilidade do dia. 😊\n\nSe você me disser a unidade, eu te passo o contato certo para confirmar isso com a equipe.'
+    );
+    return true;
+  }
+
+  if (isKidsAgeQuestion) {
+    const unitName = state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      await sendWhatsAppText(
+        from,
+        `Essa regra do *Espaço Kids* pode variar conforme a unidade e a operação do dia. 😊\n\nNa unidade *${unitName}*, o melhor é confirmar direto com a equipe pelo telefone *${unitPhone}*.\n\nSe quiser, também posso te ajudar com reserva, cardápio ou delivery.`
+      );
+      return true;
+    }
+
+    await sendWhatsAppText(
+      from,
+      'Essa regra do *Espaço Kids* pode variar conforme a unidade e a operação do dia. 😊\n\nSe você me disser a unidade, eu te passo o contato certo para confirmar isso com a equipe.'
     );
     return true;
   }
