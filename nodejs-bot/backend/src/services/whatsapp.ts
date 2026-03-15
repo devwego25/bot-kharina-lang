@@ -4112,6 +4112,15 @@ async function handleDeterministicCommand(
     return true;
   }
 
+  if (!isInActiveFlow(state) && isNewOrderIntent) {
+    const city = state.preferred_city || inferCityFromText(text) || inferCityFromUnitName(mentionedUnit?.name);
+    state.has_interacted = true;
+    state.preferred_city = city || state.preferred_city;
+    userStates.set(from, state);
+    await sendDirectDeliveryHelp(from, mentionedUnit?.name, city);
+    return true;
+  }
+
   // Greeting outside active flow -> open main menu immediately
   if (isGreeting && !isInActiveFlow(state)) {
     state.has_interacted = true;
@@ -4125,13 +4134,6 @@ async function handleDeterministicCommand(
     await sendWhatsAppSticker(from, '1296835615764631').catch((err) => {
       console.error('[WhatsApp] Thanks sticker async failed:', err?.message || err);
     });
-    return true;
-  }
-
-  if (!isInActiveFlow(state) && isNewOrderIntent) {
-    state.has_interacted = true;
-    userStates.set(from, state);
-    await sendDeliveryCitiesMenu(from);
     return true;
   }
 
