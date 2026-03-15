@@ -64,7 +64,7 @@ interface UserState {
   preferred_city?: string;
   preferred_store_id?: string;
   preferred_unit_name?: string;
-  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer';
+  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer' | 'food_info_unit_offer';
   has_interacted?: boolean;
   last_interactive_menu?: string;
   last_message_timestamp?: number;
@@ -3788,6 +3788,15 @@ async function handleDeterministicCommand(
   const isBirthdayDessertQuestion =
     /\b(sobremesa|doce|docinho|brinde)\b/.test(normalizedNoAccent) &&
     /\b(aniversariant|aniversario)\b/.test(normalizedNoAccent);
+  const isFoodInfoQuestion =
+    (
+      /\b(ingrediente|ingredientes|composicao|composição|leva|tem|vai)\b/.test(normalizedNoAccent) &&
+      /\b(maionese|molho|burger|burguer|lanche|hamburg)\b/.test(normalizedNoAccent)
+    ) ||
+    (
+      /\b(alerg|alergic|intoler)\b/.test(normalizedNoAccent) &&
+      /\b(maionese|molho|burger|burguer|lanche|hamburg)\b/.test(normalizedNoAccent)
+    );
   const isKidsAgeQuestion =
     (
       /\b(espaco kids|espaço kids|kids)\b/.test(normalizedNoAccent) ||
@@ -3963,6 +3972,54 @@ async function handleDeterministicCommand(
     await sendWhatsAppText(
       from,
       'Essa regra do *Espaço Kids* pode variar conforme a unidade e a operação do dia. 😊\n\nSe você me disser a unidade, eu te passo o contato certo para confirmar isso com a equipe.'
+    );
+    return true;
+  }
+
+  if (state.pending_offer === 'food_info_unit_offer') {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      state.pending_offer = undefined;
+      state.preferred_unit_name = unitName;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Como você mencionou alergia/ingredientes, o mais seguro é confirmar direto com a equipe da unidade *${unitName}*.\n\n📞 *${unitPhone}*\n\nSe quiser, também posso te ajudar com reserva, cardápio ou delivery.`
+      );
+      return true;
+    }
+
+    if (isThanks || isOfferRejection) {
+      state.pending_offer = undefined;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Sem problemas 😊');
+      return true;
+    }
+
+    await sendWhatsAppText(
+      from,
+      'Para eu te passar o contato certo, me diga qual unidade você quer consultar: Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo.'
+    );
+    return true;
+  }
+
+  if (isFoodInfoQuestion) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      await sendWhatsAppText(
+        from,
+        `Como você mencionou alergia/ingredientes, o mais seguro é confirmar direto com a equipe da unidade *${unitName}*.\n\n📞 *${unitPhone}*\n\nSe quiser, também posso te ajudar com reserva, cardápio ou delivery.`
+      );
+      return true;
+    }
+
+    state.pending_offer = 'food_info_unit_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Essa informação pode variar conforme a unidade e a operação do dia. 😊\n\nMe diga qual loja/unidade você quer consultar que eu te passo o contato certo.'
     );
     return true;
   }
