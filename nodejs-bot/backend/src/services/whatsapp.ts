@@ -3734,6 +3734,9 @@ async function handleDeterministicCommand(
   const isCorkageQuestion =
     /\b(rolha|vinho|bebida(?:s)?\s+de\s+casa|bebida\s+de\s+fora)\b/.test(normalizedNoAccent) &&
     /\b(pode|permitid|autoriz|levar|trazer|tem|custa|cobra|taxa)\b/.test(normalizedNoAccent);
+  const isBirthdayDessertQuestion =
+    /\b(sobremesa|doce|docinho|brinde)\b/.test(normalizedNoAccent) &&
+    /\b(aniversariant|aniversario)\b/.test(normalizedNoAccent);
   const isHappyHourQuestion =
     /\bhappy\s*hour\b/.test(normalizedNoAccent) ||
     (
@@ -3852,6 +3855,24 @@ async function handleDeterministicCommand(
     await sendWhatsAppText(
       from,
       `Sim! 🍷 Trabalhamos com rolha liberada${unit}, sem custo. Pode trazer vinho ou bebida de casa sem taxa. 😊`
+    );
+    return true;
+  }
+
+  if (isBirthdayDessertQuestion) {
+    const unitName = state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      await sendWhatsAppText(
+        from,
+        `Essa informação pode variar conforme a unidade e a disponibilidade do dia. 😊\n\nNa unidade *${unitName}*, o melhor é confirmar direto com a equipe pelo telefone *${unitPhone}*.\n\nSe quiser, também posso seguir verificando outro horário ou outra unidade para a sua reserva.`
+      );
+      return true;
+    }
+
+    await sendWhatsAppText(
+      from,
+      'Essa informação pode variar conforme a unidade e a disponibilidade do dia. 😊\n\nSe você me disser a unidade, eu te passo o contato certo para confirmar isso com a equipe.'
     );
     return true;
   }
