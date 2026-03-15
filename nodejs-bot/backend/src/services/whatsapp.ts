@@ -557,6 +557,14 @@ function inferCityFromUnitName(unitName?: string): 'Curitiba' | 'Londrina' | 'S�
   return undefined;
 }
 
+function inferCityFromText(text: string): 'Curitiba' | 'Londrina' | 'São Paulo' | undefined {
+  const normalized = normalizeIntentText(text);
+  if (/\bsao paulo\b/.test(normalized)) return 'São Paulo';
+  if (/\blondrina\b/.test(normalized)) return 'Londrina';
+  if (/\bcuritiba\b/.test(normalized) || /\bpr\b/.test(normalized)) return 'Curitiba';
+  return undefined;
+}
+
 function getCardapioCommandFromContext(unitName?: string, city?: string): 'cardapio_curitiba' | 'cardapio_londrina' | 'cardapio_saopaulo' | null {
   const resolvedCity = city || inferCityFromUnitName(unitName);
   if (resolvedCity === 'Londrina') return 'cardapio_londrina';
@@ -704,6 +712,20 @@ function rememberRecentOutboundContent(userId: string, content: string): void {
 
   recent.push({ at: now, hash });
   recentOutboundContentByUser.set(userId, recent);
+}
+
+function getRecentOutboundContents(userId: string): string[] {
+  const now = Date.now();
+  const recent = (recentOutboundContentByUser.get(userId) || [])
+    .filter((entry) => now - entry.at <= RECENT_OUTBOUND_WINDOW_MS);
+  if (recent.length === 0) return [];
+  recentOutboundContentByUser.set(userId, recent);
+  return recent.map((entry) => entry.hash);
+}
+
+function recentlyPromptedDeliveryCities(userId: string): boolean {
+  const recent = getRecentOutboundContents(userId);
+  return recent.some((content) => content.includes('de qual cidade voce esta pedindo') || content.includes('cidades com delivery'));
 }
 
 export function wasRecentlyMirroredByBot(userId: string, content: string, windowMs = RECENT_OUTBOUND_WINDOW_MS): boolean {
@@ -3769,6 +3791,16 @@ async function handleDeterministicCommand(
   const isNewOrderIntent =
     /\b(quero|queria|gostaria|preciso|posso|vou)\b.*\b(fazer\s+um\s+pedido|pedir|pedido)\b/.test(normalizedNoAccent) ||
     /\b(fazer\s+um\s+pedido|novo\s+pedido)\b/.test(normalizedNoAccent);
+  const isDeliveryOrderDetailsIntent =
+    (
+      /\b(hamburg|burger|lanche|combo|batata|classico|classicos|classico[s]?|refrigerante|milk[- ]?shake|maionese|ketchup)\b/.test(normalizedNoAccent) ||
+      /\b(pacote|pacotes|separado|separados)\b/.test(normalizedNoAccent)
+    ) &&
+    (
+      /\b(\d+|um|uma|dois|duas|tres|tres)\b/.test(normalizedNoAccent) ||
+      /\bquero\b/.test(normalizedNoAccent)
+    ) &&
+    !/\b(errad|falt|atras|reclam|problema|ruim|frio|veio)\b/.test(normalizedNoAccent);
   const mentionedUnit = getMentionedUnitFromText(text);
   const contactTargetUnit = mentionedUnit?.name || state.preferred_unit_name || '';
   const isUnitContactQuestion =
@@ -4071,6 +4103,27 @@ async function handleDeterministicCommand(
     state.has_interacted = true;
     userStates.set(from, state);
     await sendDeliveryCitiesMenu(from);
+    return true;
+  }
+
+  if (!isInActiveFlow(state) && recentlyPromptedDeliveryCities(from)) {
+    const city = inferCityFromText(text);
+    if (city) {
+      state.preferred_city = city;
+      state.has_interacted = true;
+      userStates.set(from, state);
+      if (city === 'São Paulo') {
+        await sendWhatsAppText(from, "Poxa, em SP ainda não tem delivery! 😢 Mas vem visitar a gente no Shopping Parque da Cidade! 🧡");
+        await sendMainMenu(from, true);
+        return true;
+      }
+      await sendDeliveryChoiceMenu(from);
+      return true;
+    }
+  }
+
+  if (!isInActiveFlow(state) && state.preferred_city && isDeliveryOrderDetailsIntent) {
+    await sendDirectDeliveryHelp(from, undefined, state.preferred_city);
     return true;
   }
 
