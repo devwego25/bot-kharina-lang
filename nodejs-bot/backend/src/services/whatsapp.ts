@@ -426,9 +426,22 @@ function buildReservationDateTime(date: string, time: string): Date | null {
   return reservationAt;
 }
 
-function getReservationLeadTimeMessage(unitName?: string): string {
+async function buildReservationLeadTimeCustomerMessage(
+  storeId?: string,
+  unitName?: string,
+  requestedDate?: string,
+  requestedTime?: string
+): Promise<string> {
   const unitLabel = unitName || 'essa unidade';
-  return `Para a unidade ${unitLabel}, só aceitamos reservas com pelo menos 2 horas de antecedência.\n\nSe quiser, posso verificar outro horário ou outra unidade para você.`;
+  const base = `A reserva para a unidade ${unitLabel} nesse dia e horário está bloqueada, então o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
+  const alternativeTimes =
+    storeId && requestedDate && requestedTime
+      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime))
+      : [];
+  const alternativesText = alternativeTimes.length > 0
+    ? `\n\nAlguns horários fora desse bloqueio para você tentar nessa unidade: *${alternativeTimes.join('*, *')}*.`
+    : '';
+  return `${base}${alternativesText}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
 }
 
 function getReservationLeadTimeViolation(date?: string, time?: string, unitName?: string): string | null {
@@ -437,7 +450,7 @@ function getReservationLeadTimeViolation(date?: string, time?: string, unitName?
   if (!reservationAt) return null;
   const minAllowedAt = Date.now() + (MIN_RESERVATION_LEAD_MINUTES * 60 * 1000);
   if (reservationAt.getTime() < minAllowedAt) {
-    return getReservationLeadTimeMessage(unitName);
+    return unitName || 'lead_time_violation';
   }
   return null;
 }
@@ -1892,7 +1905,10 @@ async function createReservationDeterministic(from: string, state: UserState): P
   if (leadTimeViolation) {
     if (state.reservation) state.reservation.awaiting_confirmation = false;
     userStates.set(from, state);
-    return { ok: false, message: leadTimeViolation };
+    return {
+      ok: false,
+      message: await buildReservationLeadTimeCustomerMessage(storeId, unitName, date, time)
+    };
   }
 
   const block = await findMatchingReservationBlock({ storeId, date, time });
@@ -3102,7 +3118,15 @@ async function sendReservationConfirmationOrBlock(to: string, state: UserState):
   if (leadTimeViolation) {
     if (state.reservation) state.reservation.awaiting_confirmation = false;
     userStates.set(to, state);
-    await sendWhatsAppText(to, leadTimeViolation);
+    await sendWhatsAppText(
+      to,
+      await buildReservationLeadTimeCustomerMessage(
+        state.preferred_store_id,
+        state.preferred_unit_name,
+        state.reservation?.date_text,
+        state.reservation?.time_text
+      )
+    );
     return false;
   }
 
