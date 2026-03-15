@@ -433,7 +433,12 @@ async function buildReservationLeadTimeCustomerMessage(
   requestedTime?: string
 ): Promise<string> {
   const unitLabel = unitName || 'essa unidade';
-  const base = `A reserva para a unidade ${unitLabel} nesse dia e horário está bloqueada, então o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
+  const normalizedDate = normalizeIsoDate(String(requestedDate || ''));
+  const today = toIsoDate(new Date());
+  const isToday = normalizedDate === today;
+  const base = isToday
+    ? `Para a unidade ${unitLabel}, com menos de 2 horas de antecedência, não conseguimos confirmar a reserva automática para hoje. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`
+    : `Para a unidade ${unitLabel}, só conseguimos confirmar reservas com pelo menos 2 horas de antecedência. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
   const alternativeTimes =
     storeId && requestedDate && requestedTime
       ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime))
