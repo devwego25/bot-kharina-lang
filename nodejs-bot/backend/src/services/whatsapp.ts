@@ -64,7 +64,7 @@ interface UserState {
   preferred_city?: string;
   preferred_store_id?: string;
   preferred_unit_name?: string;
-  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer' | 'food_info_unit_offer';
+  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer' | 'food_info_unit_offer' | 'unit_contact_offer';
   has_interacted?: boolean;
   last_interactive_menu?: string;
   last_message_timestamp?: number;
@@ -3797,6 +3797,17 @@ async function handleDeterministicCommand(
       /\b(alerg|alergic|intoler)\b/.test(normalizedNoAccent) &&
       /\b(maionese|molho|burger|burguer|lanche|hamburg)\b/.test(normalizedNoAccent)
     );
+  const isGourmetQuestion =
+    /\bgourmet\b/.test(normalizedNoAccent);
+  const isLostAndFoundQuestion =
+    (
+      /\b(esqueci|perdi|deixei|sumiu|esquecido|perdido)\b/.test(normalizedNoAccent) &&
+      /\b(chave|celular|carteira|documento|oculos|óculos|bolsa|mochila|carro)\b/.test(normalizedNoAccent)
+    ) ||
+    /\bachados?\s+e\s+perdidos?\b/.test(normalizedNoAccent);
+  const isHumanAssistanceRequest =
+    /\b(falar|atendente|equipe|humano|pessoa|alguem|alguém)\b/.test(normalizedNoAccent) &&
+    /\b(com|direto|preciso|quero)\b/.test(normalizedNoAccent);
   const isKidsAgeQuestion =
     (
       /\b(espaco kids|espaço kids|kids)\b/.test(normalizedNoAccent) ||
@@ -4004,6 +4015,36 @@ async function handleDeterministicCommand(
     return true;
   }
 
+  if (state.pending_offer === 'unit_contact_offer') {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      state.pending_offer = undefined;
+      state.reservation = undefined;
+      state.preferred_store_id = undefined;
+      state.preferred_unit_name = unitName;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Claro! O contato da unidade *${unitName}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com reserva, cardápio ou delivery.`
+      );
+      return true;
+    }
+
+    if (isThanks || isOfferRejection) {
+      state.pending_offer = undefined;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Sem problemas 😊');
+      return true;
+    }
+
+    await sendWhatsAppText(
+      from,
+      'Me diga qual unidade você quer consultar: Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo.'
+    );
+    return true;
+  }
+
   if (isFoodInfoQuestion) {
     const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
     const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
@@ -4020,6 +4061,31 @@ async function handleDeterministicCommand(
     await sendWhatsAppText(
       from,
       'Essa informação pode variar conforme a unidade e a operação do dia. 😊\n\nMe diga qual loja/unidade você quer consultar que eu te passo o contato certo.'
+    );
+    return true;
+  }
+
+  if (isGourmetQuestion || isLostAndFoundQuestion || isHumanAssistanceRequest) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      state.pending_offer = undefined;
+      state.reservation = undefined;
+      state.preferred_store_id = undefined;
+      state.preferred_unit_name = unitName;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Claro! O contato da unidade *${unitName}* é *${unitPhone}*.\n\nComo esse tipo de assunto precisa da equipe da loja, o melhor é falar direto com eles por lá.`
+      );
+      return true;
+    }
+
+    state.pending_offer = 'unit_contact_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Me diga qual loja/unidade você quer consultar que eu te passo o contato certo.'
     );
     return true;
   }
