@@ -45,6 +45,7 @@ interface ReservationState {
   people?: number;
   kids?: number;
   phone_confirmed?: boolean;
+  awaiting_name?: boolean;
   contact_phone?: string;
   awaiting_confirmation?: boolean;
   awaiting_cancellation?: boolean;
@@ -663,7 +664,8 @@ async function sendDirectDeliveryHelp(to: string, unitName?: string, city?: stri
 }
 
 function hasCompleteReservationData(reservation?: ReservationState): boolean {
-  return !!reservation?.people &&
+  return !!reservation?.name &&
+    !!reservation?.people &&
     !!reservation?.date_text &&
     !!reservation?.time_text &&
     reservation?.kids !== undefined;
@@ -671,6 +673,7 @@ function hasCompleteReservationData(reservation?: ReservationState): boolean {
 
 function getMissingReservationFields(reservation?: ReservationState): string[] {
   const missing: string[] = [];
+  if (!reservation?.name) missing.push('seu nome');
   if (!reservation?.people) missing.push('quantos adultos');
   if (!reservation?.date_text) missing.push('a data');
   if (!reservation?.time_text) missing.push('o horário');
@@ -1818,6 +1821,7 @@ async function beginAlterReservationFlow(
   state.reservation = {
     ...(state.reservation || {}),
     phone_confirmed: true,
+    awaiting_name: !selected.name && !state.reservation?.name,
     contact_phone: from,
     name: selected.name || state.reservation?.name,
     date_text: selected.date || state.reservation?.date_text,
@@ -1922,7 +1926,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
   const name = String(r.name || '').trim();
   const notes = String(r.notes || r.occasion || '').trim();
 
-  if (!storeId || !phone || !date || !time || !adults) {
+  if (!storeId || !phone || !date || !time || !adults || !name) {
     return {
       ok: false,
       message: 'Faltaram alguns dados obrigatórios para concluir a reserva. Vamos revisar rapidinho pelo resumo. 🙏'
@@ -4683,9 +4687,17 @@ async function handleDeterministicCommand(
       const contactName = String(profileName || '').trim();
       if (isUsableContactName(contactName)) {
         state.reservation.name = contactName;
+        state.reservation.awaiting_name = false;
       }
     }
     userStates.set(from, state);
+
+    if (!state.reservation.name) {
+      state.reservation.awaiting_name = true;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nAntes de continuar, me diga seu *nome*, por favor.`);
+      return true;
+    }
 
     const msg = `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nMe conta: quantos adultos e para quando?`;
     await sendWhatsAppText(from, msg);
@@ -4711,9 +4723,17 @@ async function handleDeterministicCommand(
         const contactName = String(profileName || '').trim();
         if (isUsableContactName(contactName)) {
           state.reservation.name = contactName;
+          state.reservation.awaiting_name = false;
         }
       }
       userStates.set(from, state);
+
+      if (!state.reservation.name) {
+        state.reservation.awaiting_name = true;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅\n\nAgora me diga seu *nome*, por favor.`);
+        return true;
+      }
 
       if (hasCompleteReservationData(state.reservation)) {
         await sendWhatsAppText(from, `Perfeito! Vou usar este número para a reserva na unidade ${state.preferred_unit_name}. ✅`);
@@ -4811,6 +4831,37 @@ async function handleDeterministicCommand(
   }
 
   if (isInActiveFlow(state) && state.preferred_unit_name && state.reservation?.phone_confirmed) {
+    if (state.reservation?.awaiting_name) {
+      const extractedName = extractExplicitNameUpdate(text, { allowBareName: true });
+      const extracted = parseReservationDetails(text);
+      if (extractedName) {
+        state.reservation = {
+          ...(state.reservation || {}),
+          ...extracted,
+          name: extractedName,
+          awaiting_name: false
+        };
+        userStates.set(from, state);
+
+        const missing = getMissingReservationFields(state.reservation);
+        if (missing.length > 0) {
+          await sendWhatsAppText(from, `Perfeito, ${extractedName}! ✅ Agora me confirma ${missing.join(' e ')}.`);
+          return true;
+        }
+
+        await sendReservationConfirmationOrBlock(from, state);
+        return true;
+      }
+
+      if (Object.keys(extracted).length > 0) {
+        state.reservation = { ...(state.reservation || {}), ...extracted, awaiting_name: true };
+        userStates.set(from, state);
+      }
+
+      await sendWhatsAppText(from, 'Antes de seguir, preciso do seu *nome* para registrar a reserva. 😊');
+      return true;
+    }
+
     const extracted = parseReservationDetails(text);
     const extractedName = extractExplicitNameUpdate(
       text,
@@ -4841,6 +4892,7 @@ async function handleDeterministicCommand(
     }
     if (extractedName) {
       extracted.name = extractedName;
+      extracted.awaiting_name = false;
     } else if (/^(?:alterar\s+o\s+)?nome\s*[:\-]?\s*$/i.test(String(text || '').trim())) {
       await sendWhatsAppText(from, 'Perfeito! Me manda o nome completo exatamente como quer deixar na reserva.');
       return true;
