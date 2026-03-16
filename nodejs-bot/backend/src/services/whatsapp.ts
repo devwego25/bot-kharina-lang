@@ -251,6 +251,28 @@ function formatBrazilPhone(raw: string): string {
   return raw;
 }
 
+function isUsableContactName(raw: string): boolean {
+  const value = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  if (/^[\d+\s\-().]+$/.test(value)) return false;
+  if (value.length < 2 || value.length > 80) return false;
+
+  const normalized = value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (
+    /\b(hoje|amanha|amanhã|para amanha|para amanhã|reserva|adult|crianc|data|horario|horário|mesa|unidade)\b/.test(normalized) ||
+    /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalized) ||
+    /\b\d{1,2}(?::|h)\d{2}\b/.test(normalized)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function toIsoDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -814,6 +836,7 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     /\bnao\s+(tera|vai\s+ter|tem)\s+crian/.test(tNoAccent) ||
     /\bnao\s+(havera|vai\s+haver)\s+crian/.test(tNoAccent) ||
     /\bnenhuma\s+crian/.test(tNoAccent) ||
+    /^(nao|não)\s+tera$/.test(tNoAccent.trim()) ||
     /^(nao|nenhuma|0)$/.test(tNoAccent.trim())
   ) {
     updates.kids = 0;
@@ -3899,6 +3922,8 @@ async function handleDeterministicCommand(
     !(
       isInActiveFlow(state) &&
       (
+        isAlterIntent ||
+        isCancelIntent ||
         hasReservationPayloadInText ||
         looksLikeReservationDateOrTimeInput ||
         /\b(reserva|adult|crianc|mesa|almoco|almoço|evento|atras|variar|aprox|mais ou menos)\b/.test(normalizedNoAccent)
@@ -4304,6 +4329,38 @@ async function handleDeterministicCommand(
     }
   }
 
+  if (isInActiveFlow(state) && isCancelIntent) {
+    const pendingChangeId = String(state.reservation?.pending_change_source_id || '').trim();
+    const pendingChangeCode = String(state.reservation?.pending_change_source_code || '').trim();
+    if (pendingChangeId) {
+      state.reservation = {
+        ...(state.reservation || {}),
+        awaiting_cancellation: true,
+        awaiting_confirmation: false,
+        pending_cancellation_id: pendingChangeId,
+        pending_cancellation_code: pendingChangeCode || pendingChangeId.substring(0, 8).toUpperCase()
+      };
+      userStates.set(from, state);
+      await sendCancelConfirmationMenu(
+        from,
+        pendingChangeId,
+        `Confirma o cancelamento da reserva ${state.reservation.pending_cancellation_code} (${state.reservation?.date_text ? toBrDate(normalizeIsoDate(state.reservation.date_text)) : 'data pendente'} às ${state.reservation?.time_text || 'horário pendente'}, ${state.preferred_unit_name || 'unidade pendente'})?`
+      );
+      return true;
+    }
+  }
+
+  if (isInActiveFlow(state) && isAlterIntent && !hasReservationPayloadInText && !looksLikeReservationDateOrTimeInput) {
+    const target =
+      /\bhorario|horário\b/.test(normalizedNoAccent) ? 'horário' :
+      /\bdata\b/.test(normalizedNoAccent) ? 'data' :
+      /\badult|pessoa\b/.test(normalizedNoAccent) ? 'quantidade de adultos' :
+      /\bcrian\b/.test(normalizedNoAccent) ? 'crianças' :
+      'dados da reserva';
+    await sendWhatsAppText(from, `Perfeito! 😊 Me diga como você quer ajustar ${target}.`);
+    return true;
+  }
+
   if (shouldHandleAsStoreHours) {
     return await answerStoreHours(from, state, text);
   }
@@ -4624,7 +4681,7 @@ async function handleDeterministicCommand(
     state.reservation.contact_phone = from;
     if (!state.reservation.name) {
       const contactName = String(profileName || '').trim();
-      if (contactName && !/^[\d+\s\-().]+$/.test(contactName)) {
+      if (isUsableContactName(contactName)) {
         state.reservation.name = contactName;
       }
     }
@@ -4652,7 +4709,7 @@ async function handleDeterministicCommand(
       state.reservation.phone_confirmed = true;
       if (!state.reservation.name) {
         const contactName = String(profileName || '').trim();
-        if (contactName && !/^[\d+\s\-().]+$/.test(contactName)) {
+        if (isUsableContactName(contactName)) {
           state.reservation.name = contactName;
         }
       }
