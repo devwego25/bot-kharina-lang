@@ -82,13 +82,26 @@ interface AdminBlockDraft {
   mode?: ReservationBlockMode;
 }
 
+interface AdminReservationCreateDraft {
+  store_id?: string;
+  store_name?: string;
+  name?: string;
+  contact_phone?: string;
+  date_text?: string;
+  time_text?: string;
+  adults?: number;
+  kids?: number;
+  notes?: string;
+}
+
 interface AdminFlowState {
   step?: string;
   draft_block?: AdminBlockDraft;
+  draft_reservation?: AdminReservationCreateDraft;
   pending_admin_phone?: string;
   pending_remove_admin_phone?: string;
   pending_disable_block_id?: number;
-  reservation_view?: 'summary' | 'today' | 'next7' | 'date';
+  reservation_view?: 'summary' | 'today' | 'next7' | 'date' | 'create';
   reservation_store_id?: string;
   reservation_store_name?: string;
   reservation_page?: number;
@@ -333,6 +346,11 @@ function clearAdminReservationState(state: UserState): void {
   delete state.admin.reservation_end_date;
 }
 
+function clearAdminReservationCreateState(state: UserState): void {
+  if (!state.admin) return;
+  delete state.admin.draft_reservation;
+}
+
 function timeToMinutes(value?: string): number | null {
   const normalized = normalizeTime(String(value || '').trim());
   const match = normalized.match(/^(\d{2}):(\d{2})$/);
@@ -513,6 +531,29 @@ function addIsoDays(isoDate: string, days: number): string {
 function parseAdminDateInput(text: string): string | null {
   const normalized = normalizeIsoDate(String(text || '').trim());
   return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
+}
+
+function parseAdminReservationPhoneInput(text: string): string | null {
+  const raw = String(text || '').trim();
+  if (!raw.startsWith('+55')) return null;
+  const digits = normalizeReservationPhone(raw);
+  return /^55\d{10,11}$/.test(digits) ? digits : null;
+}
+
+function parseAdminReservationCountInput(text: string, allowEmpty = false): number | null {
+  const normalized = normalizeIntentText(text);
+  if (allowEmpty && /^(sem|nenhuma|nenhum|nao|não|0)$/.test(normalized)) return 0;
+  const parsed = parsePtNumberToken(normalized);
+  if (parsed === null || parsed < 0 || parsed > 200) return null;
+  return parsed;
+}
+
+function parseAdminReservationNotesInput(text: string): string {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  return /^(sem observacao|sem observação|sem obs|nenhuma|nao|não)$/.test(normalizeIntentText(raw))
+    ? ''
+    : raw;
 }
 
 function normalizeIntentText(text: string): string {
@@ -2658,6 +2699,7 @@ async function sendAdminReservationsMenu(to: string): Promise<void> {
           title: 'Reservas',
           rows: [
             { id: 'admin_res_summary', title: 'Resumo geral', description: 'Compilado de todas as unidades' },
+            { id: 'admin_res_create', title: 'Criar reserva', description: 'Cadastrar reserva manualmente' },
             { id: 'admin_res_list_today', title: 'Listar reservas hoje', description: 'Reservas confirmadas com paginação' },
             { id: 'admin_res_list_next7', title: 'Próximos 7 dias', description: 'Reservas confirmadas dos próximos 7 dias' },
             { id: 'admin_res_list_date', title: 'Buscar por data', description: 'Consultar reservas confirmadas de uma data' },
@@ -2672,17 +2714,19 @@ async function sendAdminReservationsMenu(to: string): Promise<void> {
     to,
     payload,
     'send_admin_reservations_menu',
-    'Reservas: 1) Resumo geral 2) Listar reservas hoje 3) Próximos 7 dias 4) Buscar por data 5) Voltar'
+    'Reservas: 1) Resumo geral 2) Criar reserva 3) Listar reservas hoje 4) Próximos 7 dias 5) Buscar por data 6) Voltar'
   );
 }
 
-async function sendAdminReservationStoreMenu(to: string, view: 'summary' | 'today' | 'next7' | 'date'): Promise<void> {
+async function sendAdminReservationStoreMenu(to: string, view: 'summary' | 'today' | 'next7' | 'date' | 'create'): Promise<void> {
   const rows = Object.entries(UNIT_CONFIG).map(([id, unit]) => ({
     id: `admin_res_store_${id}`,
     title: unit.name,
     description:
       view === 'summary'
         ? 'Ver resumo da unidade'
+        : view === 'create'
+          ? 'Criar reserva nesta unidade'
         : view === 'today'
           ? 'Ver reservas confirmadas de hoje'
           : view === 'next7'
@@ -2700,6 +2744,8 @@ async function sendAdminReservationStoreMenu(to: string, view: 'summary' | 'toda
         text:
           view === 'summary'
             ? 'Escolha a unidade para consultar o resumo.'
+            : view === 'create'
+              ? 'Escolha a unidade para criar a reserva manualmente.'
             : view === 'today'
               ? 'Escolha a unidade para listar as reservas de hoje.'
               : view === 'next7'
@@ -2719,6 +2765,38 @@ async function sendAdminReservationStoreMenu(to: string, view: 'summary' | 'toda
     view === 'summary' ? 'send_admin_res_summary_store_menu' : 'send_admin_res_list_store_menu',
     'Escolha a unidade da consulta.'
   );
+}
+
+async function sendAdminCreateReservationConfirmMenu(to: string, draft: AdminReservationCreateDraft): Promise<void> {
+  const lines = [
+    '*Confirma a criação desta reserva?*',
+    `*Unidade:* ${draft.store_name || 'N/A'}`,
+    `*Nome:* ${draft.name || 'N/A'}`,
+    `*Telefone:* ${draft.contact_phone ? `+${draft.contact_phone}` : 'N/A'}`,
+    `*Data:* ${draft.date_text ? toBrDate(draft.date_text) : 'N/A'}`,
+    `*Horário:* ${draft.time_text || 'N/A'}`,
+    `*Adultos:* ${draft.adults ?? 'N/A'}`,
+    `*Crianças:* ${draft.kids ?? 'N/A'}`,
+    `*Observação:* ${draft.notes || 'Sem observação'}`
+  ];
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: lines.join('\n') },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'admin_res_create_save', title: 'Salvar' } },
+          { type: 'reply', reply: { id: 'admin_res_create_cancel', title: 'Cancelar' } }
+        ]
+      }
+    }
+  };
+
+  await sendInteractiveWithFallback(to, payload, 'send_admin_create_reservation_confirm_menu', lines.join('\n'));
 }
 
 async function sendAdminReservationDatePrompt(to: string, storeName: string): Promise<void> {
@@ -3260,6 +3338,7 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
   if (normalized === '/admin') {
     currentAdminState.step = 'main';
     currentAdminState.draft_block = undefined;
+    currentAdminState.draft_reservation = undefined;
     currentAdminState.pending_admin_phone = undefined;
     currentAdminState.pending_disable_block_id = undefined;
     currentAdminState.pending_remove_admin_phone = undefined;
@@ -3279,6 +3358,7 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
   if (normalized === 'admin_menu_back_main') {
     currentAdminState.step = 'main';
     currentAdminState.draft_block = undefined;
+    currentAdminState.draft_reservation = undefined;
     currentAdminState.pending_admin_phone = undefined;
     currentAdminState.pending_disable_block_id = undefined;
     currentAdminState.pending_remove_admin_phone = undefined;
@@ -3298,6 +3378,7 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
 
   if (
     normalized === 'admin_res_summary' ||
+    normalized === 'admin_res_create' ||
     normalized === 'admin_res_list_today' ||
     normalized === 'admin_res_list_next7' ||
     normalized === 'admin_res_list_date'
@@ -3313,6 +3394,17 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
         console.error('[AdminReservations] summary query failed:', err?.response?.data || err?.message || err);
         await sendWhatsAppText(from, 'Não consegui consultar o resumo geral agora. Tente novamente em instantes.');
       }
+      return true;
+    }
+
+    if (normalized === 'admin_res_create') {
+      currentAdminState.step = 'reservation_create_pick_store';
+      currentAdminState.reservation_view = 'create';
+      currentAdminState.draft_reservation = {};
+      clearAdminReservationState(state);
+      currentAdminState.reservation_view = 'create';
+      userStates.set(from, state);
+      await sendAdminReservationStoreMenu(from, 'create');
       return true;
     }
 
@@ -3348,7 +3440,16 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
     userStates.set(from, state);
 
     try {
-      if (currentAdminState.reservation_view === 'today') {
+      if (currentAdminState.reservation_view === 'create') {
+        currentAdminState.step = 'reservation_create_wait_name';
+        currentAdminState.draft_reservation = {
+          ...(currentAdminState.draft_reservation || {}),
+          store_id: unit.storeId,
+          store_name: unit.name
+        };
+        userStates.set(from, state);
+        await sendWhatsAppText(from, `Perfeito. Vamos criar uma reserva para a unidade ${unit.name}. Me envie o *nome do cliente*.`);
+      } else if (currentAdminState.reservation_view === 'today') {
         const today = getSaoPauloTodayIso();
         currentAdminState.step = 'reservation_list';
         currentAdminState.reservation_start_date = today;
@@ -3379,6 +3480,162 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
       console.error('[AdminReservations] store query failed:', err?.response?.data || err?.message || err);
       await sendWhatsAppText(from, 'Não consegui consultar a API de reservas agora. Tente novamente em instantes.');
     }
+    return true;
+  }
+
+  if (normalized === 'admin_res_create_cancel') {
+    currentAdminState.step = 'reservations';
+    currentAdminState.draft_reservation = undefined;
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Criação manual de reserva cancelada.');
+    await sendAdminReservationsMenu(from);
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_name') {
+    const name = extractExplicitNameUpdate(raw, { allowBareName: true }) || '';
+    if (!name || !isUsableContactName(name)) {
+      await sendWhatsAppText(from, 'Nome inválido. Me envie o *nome completo do cliente*.');
+      return true;
+    }
+    currentAdminState.step = 'reservation_create_wait_phone';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      name
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Agora me envie o *telefone* no formato *+55DDDNÚMERO*. Ex.: `+5541999999999`');
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_phone') {
+    const phone = parseAdminReservationPhoneInput(raw);
+    if (!phone) {
+      await sendWhatsAppText(from, 'Telefone inválido. Envie no formato *+55DDDNÚMERO*. Ex.: `+5541999999999`');
+      return true;
+    }
+    currentAdminState.step = 'reservation_create_wait_date';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      contact_phone: phone
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Agora me envie a *data* no formato *DD/MM/AAAA*.');
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_date') {
+    const parsedDate = parseAdminDateInput(raw);
+    if (!parsedDate) {
+      await sendWhatsAppText(from, 'Data inválida. Envie no formato *DD/MM/AAAA*.');
+      return true;
+    }
+    currentAdminState.step = 'reservation_create_wait_time';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      date_text: parsedDate
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Agora me envie o *horário* no formato *HH:MM*. Ex.: `19:30`');
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_time') {
+    const parsedTime = isValidAdminTimeInput(raw);
+    if (!parsedTime) {
+      await sendWhatsAppText(from, 'Horário inválido. Envie no formato *HH:MM*. Ex.: `19:30`');
+      return true;
+    }
+    currentAdminState.step = 'reservation_create_wait_adults';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      time_text: parsedTime
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Quantos *adultos* estarão na reserva?');
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_adults') {
+    const adults = parseAdminReservationCountInput(raw);
+    if (adults === null || adults <= 0) {
+      await sendWhatsAppText(from, 'Quantidade inválida. Me envie o número de *adultos* usando apenas número. Ex.: `4`');
+      return true;
+    }
+    currentAdminState.step = 'reservation_create_wait_kids';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      adults
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Quantas *crianças* irão? Se não tiver, responda `0`.');
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_kids') {
+    const kids = parseAdminReservationCountInput(raw, true);
+    if (kids === null || kids < 0) {
+      await sendWhatsAppText(from, 'Quantidade inválida. Me envie o número de *crianças*. Se não tiver, responda `0`.');
+      return true;
+    }
+    currentAdminState.step = 'reservation_create_wait_notes';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      kids
+    };
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Se houver *observação*, me envie agora. Se não houver, responda `sem observação`.');
+    return true;
+  }
+
+  if (currentAdminState.step === 'reservation_create_wait_notes') {
+    currentAdminState.step = 'reservation_create_confirm';
+    currentAdminState.draft_reservation = {
+      ...(currentAdminState.draft_reservation || {}),
+      notes: parseAdminReservationNotesInput(raw)
+    };
+    userStates.set(from, state);
+    await sendAdminCreateReservationConfirmMenu(from, currentAdminState.draft_reservation || {});
+    return true;
+  }
+
+  if (normalized === 'admin_res_create_save') {
+    const draft = currentAdminState.draft_reservation || {};
+    if (!draft.store_id || !draft.store_name || !draft.name || !draft.contact_phone || !draft.date_text || !draft.time_text || draft.adults === undefined || draft.kids === undefined) {
+      await sendWhatsAppText(from, 'Faltaram dados da reserva manual. Vou voltar ao menu de reservas.');
+      currentAdminState.step = 'reservations';
+      currentAdminState.draft_reservation = undefined;
+      userStates.set(from, state);
+      await sendAdminReservationsMenu(from);
+      return true;
+    }
+
+    const preservedState = userStates.get(from);
+    const tempState: UserState = {
+      preferred_store_id: draft.store_id,
+      preferred_unit_name: draft.store_name,
+      reservation: {
+        name: draft.name,
+        contact_phone: draft.contact_phone,
+        phone_confirmed: true,
+        date_text: draft.date_text,
+        time_text: draft.time_text,
+        people: draft.adults,
+        kids: draft.kids,
+        notes: draft.notes || undefined
+      }
+    };
+
+    await sendWhatsAppText(from, 'Perfeito! ✅ Estou criando a reserva manual agora, só um instante...');
+    const result = await createReservationDeterministic(from, tempState);
+    if (preservedState) userStates.set(from, preservedState);
+    else userStates.delete(from);
+
+    currentAdminState.step = 'reservations';
+    currentAdminState.draft_reservation = undefined;
+    userStates.set(from, state);
+    await sendWhatsAppText(from, result.message);
+    await sendAdminReservationsMenu(from);
     return true;
   }
 
