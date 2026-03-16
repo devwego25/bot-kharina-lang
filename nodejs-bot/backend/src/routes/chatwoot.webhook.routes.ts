@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { config } from '../config/env';
-import { sendWhatsAppText, wasRecentlyMirroredByBot } from '../services/whatsapp';
+import { clearReservationDraftForUser, sendWhatsAppText, wasRecentlyMirroredByBot } from '../services/whatsapp';
 
 const router = Router();
 
@@ -90,6 +90,9 @@ router.post('/webhook/chatwoot', async (req: Request, res: Response) => {
   }
 
   try {
+    if (/^(Reserva confirmada:|Consegui confirmar sua reserva\b)/i.test(content)) {
+      clearReservationDraftForUser(to);
+    }
     await sendWhatsAppText(to, content);
     console.log(`[Chatwoot Relay] Forwarded agent message to WhatsApp ${to}`);
     res.status(200).json({ ok: true });

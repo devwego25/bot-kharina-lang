@@ -889,7 +889,7 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   const updates: Partial<ReservationState> = {};
 
   const peopleMatch =
-    tNoAccent.match(/\b(\d+)\s*(pessoa|pessoas|adulto|adultos)\b/) ||
+    tNoAccent.match(/\b(\d+)\s*[:\-]?\s*(pessoa|pessoas|adulto|adultos)\b/) ||
     tNoAccent.match(/\b(pessoas?|adultos?)\s*[:\-]?\s*(\d+)\b/);
   if (peopleMatch) {
     const val = parseInt((peopleMatch[1] || peopleMatch[2] || '0'), 10);
@@ -914,8 +914,8 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     updates.kids = 0;
   } else {
     const kidsMatch =
-      tNoAccent.match(/\b(\d+)\s*(crianca|criancas)\b/) ||
-      tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*(crianca|criancas)\\b`));
+      tNoAccent.match(/\b(\d+)\s*[:\-]?\s*(crianca|criancas)\b/) ||
+      tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*[:\\-]?\\s*(crianca|criancas)\\b`));
     if (kidsMatch) {
       const k = parsePtNumberToken(kidsMatch[1]);
       if (k !== null && k >= 0) updates.kids = k;
@@ -3326,6 +3326,29 @@ function isInActiveFlow(state: UserState | undefined): boolean {
   return false;
 }
 
+function clearReservationDraftState(state: UserState): void {
+  state.reservation = undefined;
+  state.preferred_store_id = undefined;
+  state.preferred_unit_name = undefined;
+  state.pending_offer = undefined;
+}
+
+export function clearReservationDraftForUser(userId: string): void {
+  const state = userStates.get(userId);
+  if (!state) return;
+  clearReservationDraftState(state);
+  userStates.set(userId, state);
+}
+
+function looksLikeExternalReservationResolution(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  return (
+    /\b(minha filha ja confirmou|minha filha ja fez|minha filha confirmou|ja confirmou|ja foi confirmado|ja esta confirmado|ja esta confirmada|ja esta resolvido)\b/.test(normalized) ||
+    /^reserva confirmada\b/.test(normalized) ||
+    /^consegui confirmar sua reserva\b/.test(normalized)
+  );
+}
+
 async function sendAdminBlockList(to: string): Promise<void> {
   const blocks = await listReservationBlocks(true, 50);
   if (blocks.length === 0) {
@@ -4099,6 +4122,7 @@ async function handleDeterministicCommand(
     !!parsedReservationInput.notes;
   const isThanks = /\b(obrigad[oa]?|valeu|agrade[cç]o|muito obrigado|brigad[oa]?|thanks)\b/.test(normalized);
   const isGreeting = GREETING_COMMANDS.has(normalized) || GREETING_REGEX.test(normalized);
+  const isExternalReservationResolved = looksLikeExternalReservationResolution(text);
   const isGenericAck = /^(ok|okay|okk|blz|beleza|certo|certinho|fechado|show|perfeito|sim|isso|mandei|enviei|ja te mandei|ja mandei|te mandei|pronto|segue|pode ser)$/.test(normalizedIntent);
   const isOfferAcceptance =
     isGenericAck ||
@@ -4259,10 +4283,17 @@ async function handleDeterministicCommand(
 
   // Main menu
   if (text === 'MENU_PRINCIPAL' || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
-    state.reservation = undefined;
+    clearReservationDraftState(state);
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, false);
+    return true;
+  }
+
+  if (isInActiveFlow(state) && (isExternalReservationResolved || (isThanks && /confirm/.test(normalizedNoAccent)))) {
+    clearReservationDraftState(state);
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
     return true;
   }
 
@@ -5087,6 +5118,10 @@ async function handleDeterministicCommand(
     await sendWhatsAppText(from, done.message);
     if (!done.ok) {
       const suggestWait = done.message.toLowerCase().includes('alguns minutos');
+      if (suggestWait && state.reservation) {
+        state.reservation.awaiting_confirmation = false;
+        userStates.set(from, state);
+      }
       const hasRecoverableDraft = hasCompleteReservationData(state.reservation);
       if (!suggestWait && hasRecoverableDraft) {
         await sendReservationConfirmationOrBlock(from, state);
