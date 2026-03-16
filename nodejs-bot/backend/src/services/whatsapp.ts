@@ -16,6 +16,7 @@ import { db } from './db';
 import { langchainService } from './langchain';
 import { McpClient } from './mcp';
 import { reservasAdminApiService } from './reservasAdminApi';
+import { reservasWebhookApiService } from './reservasWebhookApi';
 import {
   addOrUpdateAdminUser,
   blockModeLabel,
@@ -383,7 +384,8 @@ async function suggestReservationAlternativeTimes(
   storeId: string,
   unitName: string,
   date: string,
-  requestedTime: string
+  requestedTime: string,
+  numberOfPeople = 2
 ): Promise<string[]> {
   const weekday = reservationWeekdayFromIso(date);
   const weekdayKey = weekdayKeyFromIso(date);
@@ -415,13 +417,37 @@ async function suggestReservationAlternativeTimes(
     candidates.push(minutes);
   }
 
-  const picked = candidates
+  const rankedCandidates = candidates
     .sort((a, b) => {
       const diff = Math.abs(a - requestedMinutes) - Math.abs(b - requestedMinutes);
       if (diff !== 0) return diff;
       return a - b;
-    })
-    .slice(0, 4)
+    });
+
+  let pickedMinutes = rankedCandidates.slice(0, 4);
+  if (reservasWebhookApiService.isConfigured() && numberOfPeople > 0) {
+    const availableMinutes: number[] = [];
+    for (const minutes of rankedCandidates.slice(0, 10)) {
+      try {
+        const availability = await reservasWebhookApiService.checkAvailability({
+          storeId,
+          date,
+          time: minutesToTime(minutes),
+          numberOfPeople
+        });
+        if (availability?.available) {
+          availableMinutes.push(minutes);
+          if (availableMinutes.length >= 4) break;
+        }
+      } catch (err: any) {
+        console.error('[ReservasDeterministic] webhook availability fallback failed:', err?.message || err);
+        break;
+      }
+    }
+    if (availableMinutes.length > 0) pickedMinutes = availableMinutes;
+  }
+
+  const picked = pickedMinutes
     .sort((a, b) => a - b)
     .map((minutes) => minutesToTime(minutes));
 
@@ -433,13 +459,14 @@ async function buildReservationBlockCustomerMessage(
   storeId?: string,
   unitName?: string,
   requestedDate?: string,
-  requestedTime?: string
+  requestedTime?: string,
+  numberOfPeople = 2
 ): Promise<string> {
   const unitLabel = unitName || block.store_name || 'essa unidade';
   const base = `A reserva para a unidade ${unitLabel} nesse dia e horário está bloqueada, então o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
   const alternativeTimes =
     storeId && requestedDate && requestedTime
-      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime))
+      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime), numberOfPeople)
       : [];
   const alternativesText = alternativeTimes.length > 0
     ? `\n\nAlguns horários fora desse bloqueio para você tentar nessa unidade: *${alternativeTimes.join('*, *')}*.`
@@ -471,7 +498,8 @@ async function buildReservationLeadTimeCustomerMessage(
   storeId?: string,
   unitName?: string,
   requestedDate?: string,
-  requestedTime?: string
+  requestedTime?: string,
+  numberOfPeople = 2
 ): Promise<string> {
   const unitLabel = unitName || 'essa unidade';
   const normalizedDate = normalizeIsoDate(String(requestedDate || ''));
@@ -482,7 +510,7 @@ async function buildReservationLeadTimeCustomerMessage(
     : `Para a unidade ${unitLabel}, só conseguimos confirmar reservas com pelo menos 2 horas de antecedência. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
   const alternativeTimes =
     storeId && requestedDate && requestedTime
-      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime))
+      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime), numberOfPeople)
       : [];
   const alternativesText = alternativeTimes.length > 0
     ? `\n\nAlguns horários fora desse bloqueio para você tentar nessa unidade: *${alternativeTimes.join('*, *')}*.`
@@ -1393,13 +1421,32 @@ async function getStoresWithHours(): Promise<any[]> {
     return cached.data;
   }
 
-  const mcpReady = await ensureReservasMcpReady();
-  if (!mcpReady) return [];
-  const result = await callReservasToolWithTimeout('list_stores', {}, { timeoutMs: 15000, retries: 1, retryDelayMs: 600 });
-  const payload = parseMcpToolText(result);
-  const stores = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
-  storesHoursCache.set(cacheKey, { data: stores, at: Date.now() });
-  return stores;
+  try {
+    const mcpReady = await ensureReservasMcpReady();
+    if (mcpReady) {
+      const result = await callReservasToolWithTimeout('list_stores', {}, { timeoutMs: 15000, retries: 1, retryDelayMs: 600 });
+      const payload = parseMcpToolText(result);
+      const stores = Array.isArray(payload?.data) ? payload.data : (Array.isArray(payload) ? payload : []);
+      if (stores.length > 0) {
+        storesHoursCache.set(cacheKey, { data: stores, at: Date.now() });
+        return stores;
+      }
+    }
+  } catch (err: any) {
+    console.error('[ReservasDeterministic] MCP list_stores failed, trying webhook fallback:', err?.message || err);
+  }
+
+  try {
+    const stores = await reservasWebhookApiService.listStores();
+    if (stores.length > 0) {
+      storesHoursCache.set(cacheKey, { data: stores, at: Date.now() });
+      return stores;
+    }
+  } catch (err: any) {
+    console.error('[ReservasDeterministic] webhook stores fallback failed:', err?.message || err);
+  }
+
+  return [];
 }
 
 async function answerStoreHours(from: string, state: UserState, text: string): Promise<boolean> {
@@ -1980,7 +2027,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     userStates.set(from, state);
     return {
       ok: false,
-      message: await buildReservationLeadTimeCustomerMessage(storeId, unitName, date, time)
+      message: await buildReservationLeadTimeCustomerMessage(storeId, unitName, date, time, totalPeople)
     };
   }
 
@@ -1990,7 +2037,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     userStates.set(from, state);
     return {
       ok: false,
-      message: await buildReservationBlockCustomerMessage(block, storeId, unitName, date, time)
+      message: await buildReservationBlockCustomerMessage(block, storeId, unitName, date, time, totalPeople)
     };
   }
 
@@ -3234,7 +3281,8 @@ async function sendReservationConfirmationOrBlock(to: string, state: UserState):
         state.preferred_store_id,
         state.preferred_unit_name,
         state.reservation?.date_text,
-        state.reservation?.time_text
+        state.reservation?.time_text,
+        Number(state.reservation?.people || 0) + Number(state.reservation?.kids ?? 0)
       )
     );
     return false;
@@ -3257,7 +3305,8 @@ async function sendReservationConfirmationOrBlock(to: string, state: UserState):
       state.preferred_store_id,
       state.preferred_unit_name,
       state.reservation?.date_text,
-      state.reservation?.time_text
+      state.reservation?.time_text,
+      Number(state.reservation?.people || 0) + Number(state.reservation?.kids ?? 0)
     )
   );
   return false;
@@ -4583,7 +4632,8 @@ async function handleDeterministicCommand(
           state.preferred_store_id,
           state.preferred_unit_name,
           state.reservation?.date_text,
-          state.reservation?.time_text
+          state.reservation?.time_text,
+          Number(state.reservation?.people || 0) + Number(state.reservation?.kids ?? 0)
         )
       );
       return true;

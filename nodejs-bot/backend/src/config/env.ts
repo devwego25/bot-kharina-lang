@@ -28,6 +28,10 @@ export const config = {
         adminEmail: process.env.RESERVAS_API_ADMIN_EMAIL || '',
         adminPassword: process.env.RESERVAS_API_ADMIN_PASSWORD || '',
     },
+    reservasWebhook: {
+        url: process.env.RESERVAS_WEBHOOK_URL || 'https://api.reservas.kharina.com.br/api/webhook',
+        key: process.env.RESERVAS_WEBHOOK_KEY || '',
+    },
     whatsapp: {
         token: process.env.WHATSAPP_TOKEN,
         phoneId: process.env.WHATSAPP_PHONE_ID,
