@@ -47,6 +47,7 @@ interface ReservationState {
   kids?: number;
   phone_confirmed?: boolean;
   awaiting_name?: boolean;
+  awaiting_manual_review?: boolean;
   contact_phone?: string;
   awaiting_confirmation?: boolean;
   awaiting_cancellation?: boolean;
@@ -2187,6 +2188,11 @@ async function createReservationDeterministic(from: string, state: UserState): P
     }
 
     if (!picked.id) {
+      if (state.reservation) {
+        state.reservation.awaiting_confirmation = false;
+        state.reservation.awaiting_manual_review = true;
+        userStates.set(from, state);
+      }
       const alertMsg = [
         'ALERTA RESERVA: criação sem ID confirmado.',
         `Telefone: +${phone}`,
@@ -2302,6 +2308,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
       console.error('[Chatwoot] reservation alert failed:', cwErr?.message || cwErr);
     });
     if (state.reservation) state.reservation.awaiting_confirmation = true;
+    if (state.reservation) state.reservation.awaiting_manual_review = true;
     userStates.set(from, state);
     return {
       ok: false,
@@ -3363,6 +3370,15 @@ function clearReservationDraftState(state: UserState): void {
   state.pending_offer = undefined;
 }
 
+function getManualReviewMessage(state: UserState): string {
+  const unitName = state.preferred_unit_name || '';
+  const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+  if (unitName && unitPhone) {
+    return `Sua solicitação anterior está em verificação pelo nosso time para confirmar a reserva com segurança. 😊\n\nSe preferir falar direto com a unidade *${unitName}*, o telefone é *${unitPhone}*.`;
+  }
+  return 'Sua solicitação anterior está em verificação pelo nosso time para confirmar a reserva com segurança. 😊';
+}
+
 export function clearReservationDraftForUser(userId: string): void {
   const state = userStates.get(userId);
   if (!state) return;
@@ -4200,6 +4216,8 @@ async function handleDeterministicCommand(
     /\b(com|direto|preciso|quero)\b/.test(normalizedNoAccent);
   const isFrustrationMessage =
     /\b(ja mandei|ja enviei|mande[iy]\s+\d+|pqp|que saco|sistema espanta cliente|nao funciona|não funciona|erro de novo|quatro vezes|seis vezes)\b/.test(normalizedNoAccent);
+  const isReviewStatusRequest =
+    /\b(confirma|confirmar|pode me confirmar|consegue confirmar|confirmacao|confirmação|ja foi|já foi|deu certo|certo)\b/.test(normalizedNoAccent);
   const isKidsAgeQuestion =
     (
       /\b(espaco kids|espaço kids|kids)\b/.test(normalizedNoAccent) ||
@@ -4330,6 +4348,20 @@ async function handleDeterministicCommand(
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
     return true;
+  }
+
+  if (state.reservation?.awaiting_manual_review) {
+    if (isExternalReservationResolved) {
+      clearReservationDraftState(state);
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
+      return true;
+    }
+
+    if (isGreeting || isGenericAck || isThanks || isReviewStatusRequest || isFrustrationMessage) {
+      await sendWhatsAppText(from, getManualReviewMessage(state));
+      return true;
+    }
   }
 
   if (isBirthdayCakeQuestion && !isCakeNoteStatement) {
@@ -5198,6 +5230,7 @@ async function handleDeterministicCommand(
       const suggestWait = done.message.toLowerCase().includes('alguns minutos');
       if (suggestWait && state.reservation) {
         state.reservation.awaiting_confirmation = false;
+        state.reservation.awaiting_manual_review = true;
         userStates.set(from, state);
       }
       const hasRecoverableDraft = hasCompleteReservationData(state.reservation);
