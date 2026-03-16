@@ -935,6 +935,36 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
   }
 
   if (!updates.date_text) {
+    const monthMap: Record<string, number> = {
+      janeiro: 1,
+      fevereiro: 2,
+      marco: 3,
+      abril: 4,
+      maio: 5,
+      junho: 6,
+      julho: 7,
+      agosto: 8,
+      setembro: 9,
+      outubro: 10,
+      novembro: 11,
+      dezembro: 12,
+    };
+    const monthMatch = tNoAccent.match(/\b(\d{1,2})\s*(?:de\s*)?(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b/);
+    if (monthMatch) {
+      const day = parseInt(monthMatch[1], 10);
+      const mon = monthMap[monthMatch[2]];
+      let year = today.getFullYear();
+      const candidateCurrent = new Date(year, mon - 1, day);
+      if (candidateCurrent < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
+        year += 1;
+      }
+      if (day >= 1 && day <= 31) {
+        updates.date_text = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+  }
+
+  if (!updates.date_text) {
     if (/\bhoje\b/.test(tNoAccent)) {
       updates.date_text = toIsoDate(today);
     } else if (/\bamanh/.test(tNoAccent)) {
@@ -4145,6 +4175,8 @@ async function handleDeterministicCommand(
   const isBirthdayDessertQuestion =
     /\b(sobremesa|doce|docinho|brinde)\b/.test(normalizedNoAccent) &&
     /\b(aniversariant|aniversario)\b/.test(normalizedNoAccent);
+  const isDietaryOptionsQuestion =
+    /\b(vegano|vegana|veganos|veganas|vegetariano|vegetariana|vegetarianos|vegetarianas)\b/.test(normalizedNoAccent);
   const isFoodInfoQuestion =
     (
       /\b(ingrediente|ingredientes|composicao|composição|leva|tem|vai)\b/.test(normalizedNoAccent) &&
@@ -4163,8 +4195,11 @@ async function handleDeterministicCommand(
     ) ||
     /\bachados?\s+e\s+perdidos?\b/.test(normalizedNoAccent);
   const isHumanAssistanceRequest =
+    /\batendimento\s+humano\b/.test(normalizedNoAccent) ||
     /\b(falar|atendente|equipe|humano|pessoa|alguem|alguém)\b/.test(normalizedNoAccent) &&
     /\b(com|direto|preciso|quero)\b/.test(normalizedNoAccent);
+  const isFrustrationMessage =
+    /\b(ja mandei|ja enviei|mande[iy]\s+\d+|pqp|que saco|sistema espanta cliente|nao funciona|não funciona|erro de novo|quatro vezes|seis vezes)\b/.test(normalizedNoAccent);
   const isKidsAgeQuestion =
     (
       /\b(espaco kids|espaço kids|kids)\b/.test(normalizedNoAccent) ||
@@ -4431,6 +4466,29 @@ async function handleDeterministicCommand(
     return true;
   }
 
+  if (isDietaryOptionsQuestion) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    const city = state.preferred_city || inferCityFromUnitName(unitName);
+    const cardapioCommand = getCardapioCommandFromContext(unitName, city);
+    if (cardapioCommand) {
+      const msg = await buildCardapioMessage(cardapioCommand);
+      await sendWhatsAppText(
+        from,
+        `As opções vegetarianas/veganas podem variar conforme a unidade e o cardápio disponível. 😊\n\n${msg}${unitPhone ? `\n\nSe quiser confirmar detalhes direto com a equipe da unidade *${unitName}*, o telefone é *${unitPhone}*.` : ''}`
+      );
+      return true;
+    }
+
+    state.pending_offer = 'food_info_unit_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'As opções vegetarianas/veganas podem variar conforme a unidade e o cardápio disponível. 😊\n\nMe diga a cidade ou unidade que eu te envio o cardápio e o contato certo para confirmar.'
+    );
+    return true;
+  }
+
   if (isGourmetQuestion || isLostAndFoundQuestion || isHumanAssistanceRequest) {
     const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
     const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
@@ -4453,6 +4511,26 @@ async function handleDeterministicCommand(
       from,
       'Me diga qual loja/unidade você quer consultar que eu te passo o contato certo.'
     );
+    return true;
+  }
+
+  if (isInActiveFlow(state) && (isHumanAssistanceRequest || isFrustrationMessage)) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    clearReservationDraftState(state);
+    if (unitName) state.preferred_unit_name = unitName;
+    userStates.set(from, state);
+    if (unitPhone) {
+      await sendWhatsAppText(
+        from,
+        `Entendi. Vou encerrar o fluxo automático por aqui. 😊\n\nPara seguir direto com a equipe da unidade *${unitName}*, o telefone é *${unitPhone}*.`
+      );
+    } else {
+      await sendWhatsAppText(
+        from,
+        'Entendi. Vou encerrar o fluxo automático por aqui. 😊\n\nSe você me disser a unidade, eu te passo o contato certo da equipe.'
+      );
+    }
     return true;
   }
 
