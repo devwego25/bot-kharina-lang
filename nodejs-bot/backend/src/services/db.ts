@@ -119,11 +119,40 @@ export const db = {
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS reservation_attempts (
+            id BIGSERIAL PRIMARY KEY,
+            phone VARCHAR(32) NOT NULL,
+            store_id VARCHAR(64) NOT NULL,
+            store_name VARCHAR(128) NOT NULL,
+            customer_name VARCHAR(128),
+            date_text VARCHAR(10) NOT NULL,
+            time_text VARCHAR(5) NOT NULL,
+            adults INTEGER NOT NULL DEFAULT 0,
+            kids INTEGER NOT NULL DEFAULT 0,
+            total_people INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            status VARCHAR(32) NOT NULL CHECK (status IN ('creating', 'manual_review', 'confirmed_bot', 'confirmed_recovered', 'confirmed_manual', 'failed')),
+            resolution_source VARCHAR(32),
+            reservation_id VARCHAR(128),
+            reservation_code VARCHAR(64),
+            last_error TEXT,
+            manual_review_notified_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS idx_admin_users_active_role ON admin_users (active, role);
         CREATE INDEX IF NOT EXISTS idx_reservation_blocks_lookup ON reservation_blocks (active, store_id, weekday, start_time, end_time);
+        CREATE INDEX IF NOT EXISTS idx_reservation_attempts_lookup ON reservation_attempts (phone, store_id, date_text, time_text, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_reservation_attempts_status ON reservation_attempts (status, updated_at DESC);
       `;
         try {
             await pool.query(createTableText);
+            await pool.query(`
+                ALTER TABLE reservation_attempts
+                ADD COLUMN IF NOT EXISTS manual_review_notified_at TIMESTAMP
+            `);
             console.log('[DB] Config table initialized');
         } catch (err) {
             console.error('[DB] Failed to init config table', err);

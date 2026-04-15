@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { config } from '../config/env';
-import { clearReservationDraftForUser, sendWhatsAppText, wasRecentlyMirroredByBot } from '../services/whatsapp';
+import { clearReservationDraftForUser, markReservationAttemptManualConfirmedForUser, sendWhatsAppText, wasRecentlyMirroredByBot } from '../services/whatsapp';
 
 const router = Router();
 
@@ -91,6 +91,8 @@ router.post('/webhook/chatwoot', async (req: Request, res: Response) => {
 
   try {
     if (/^(Reserva confirmada:|Consegui confirmar sua reserva\b)/i.test(content)) {
+      const codeMatch = content.match(/\b([A-Z0-9]{6,12})\b/);
+      await markReservationAttemptManualConfirmedForUser(to, codeMatch?.[1]);
       clearReservationDraftForUser(to);
     }
     await sendWhatsAppText(to, content);

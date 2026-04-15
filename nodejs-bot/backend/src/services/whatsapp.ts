@@ -18,21 +18,30 @@ import { McpClient } from './mcp';
 import { reservasAdminApiService } from './reservasAdminApi';
 import { reservasWebhookApiService } from './reservasWebhookApi';
 import {
+  beginReservationAttempt,
+  markLatestAttemptManualConfirmed,
+  updateReservationAttemptStatus
+} from './reservationAttempts';
+import { syncReservationVerificationState } from './reservationReconciliation';
+import {
   addOrUpdateAdminUser,
   blockModeLabel,
   buildDefaultBlockMessage,
   createReservationBlock,
+  DEFAULT_RESERVATION_LEAD_MINUTES,
   describeReservationBlock,
   deactivateAdminUser,
   deactivateReservationBlock,
   findMatchingReservationBlock,
   getAdminUser,
+  getReservationLeadMinutes,
   getReservationBlock,
   hasAnyAdminConfigured,
   isConfiguredMasterPhone,
   listAdminUsers,
   listReservationBlocks,
   normalizeAdminPhone,
+  setReservationLeadMinutes,
   type AdminRole,
   type ReservationBlock,
   type ReservationBlockMode,
@@ -48,6 +57,7 @@ interface ReservationState {
   phone_confirmed?: boolean;
   awaiting_name?: boolean;
   awaiting_manual_review?: boolean;
+  manual_review_last_notice_at?: number;
   contact_phone?: string;
   awaiting_confirmation?: boolean;
   awaiting_cancellation?: boolean;
@@ -61,18 +71,28 @@ interface ReservationState {
   pending_cancellation_id?: string;
   pending_cancellation_code?: string;
   pending_cancellation_all_ids?: string[];
+  pending_attempt_id?: number;
 }
 
 interface UserState {
   preferred_city?: string;
   preferred_store_id?: string;
   preferred_unit_name?: string;
-  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer' | 'food_info_unit_offer' | 'unit_contact_offer';
+  pending_offer?: 'pet_friendly_reservation_offer' | 'cake_note_offer' | 'food_info_unit_offer' | 'unit_contact_offer' | 'delivery_help_offer';
   has_interacted?: boolean;
   last_interactive_menu?: string;
   last_message_timestamp?: number;
   reservation?: ReservationState;
+  help?: HelpFlowState;
   admin?: AdminFlowState;
+}
+
+interface HelpFlowState {
+  type?: 'lost_found' | 'public_admin_menu' | 'public_admin_rh_menu';
+  awaiting_unit?: boolean;
+  awaiting_item?: boolean;
+  unit_name?: string;
+  store_id?: string;
 }
 
 interface AdminBlockDraft {
@@ -100,6 +120,7 @@ interface AdminFlowState {
   step?: string;
   draft_block?: AdminBlockDraft;
   draft_reservation?: AdminReservationCreateDraft;
+  pending_lead_time_minutes?: number;
   pending_admin_phone?: string;
   pending_remove_admin_phone?: string;
   pending_disable_block_id?: number;
@@ -120,6 +141,7 @@ interface CapturedOutboundMessage {
 interface RecentOutboundEntry {
   at: number;
   hash: string;
+  content: string;
 }
 
 // In-memory state (consider moving to Redis for multi-instance)
@@ -141,8 +163,8 @@ const BOT_ACTIVE_CACHE_TTL_MS = 15_000;
 const BOT_ACTIVE_TIMEOUT_MS = 700;
 const STORES_HOURS_CACHE_TTL_MS = 10 * 60 * 1000;
 const RECENT_OUTBOUND_WINDOW_MS = 2 * 60 * 1000;
-const MIN_RESERVATION_LEAD_MINUTES = 120;
 const ADMIN_RESERVATION_PAGE_SIZE = 6;
+const RESERVATION_CLOSING_BUFFER_MINUTES = 60;
 const SCOPE_ONLY_MSG = 'Só posso ajudar com assuntos do restaurante: cardápio, reservas e delivery.';
 const PT_NUMBER_TOKEN_PATTERN = '(?:\\d+|zero|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)';
 const HAPPY_HOUR_INFO_TEXT = [
@@ -162,11 +184,30 @@ const PET_FRIENDLY_INFO_TEXT = [
   '',
   'Se quiser, também posso te ajudar a fazer uma *reserva para a unidade Água Verde*.'
 ].join('\n');
+let reservationLeadMinutesCache: { value: number; at: number } | null = null;
+const RESERVATION_LEAD_MINUTES_CACHE_TTL_MS = 30_000;
 
 // Command sets
-const MENU_COMMANDS = new Set(['MENU_PRINCIPAL', 'menu_cardapio', 'menu_reserva', 'menu_delivery', 'menu_kids']);
+const MENU_COMMANDS = new Set([
+  'MENU_PRINCIPAL',
+  'menu_cardapio',
+  'menu_reserva',
+  'menu_delivery',
+  'menu_kids',
+  'menu_help',
+  'help_lost_found',
+  'help_unit_contact',
+  'menu_public_admin',
+  'public_admin_rh',
+  'public_admin_compras',
+  'public_admin_financeiro',
+  'public_admin_feedback',
+  'public_admin_rh_employee',
+  'public_admin_rh_candidate'
+]);
 const GREETING_COMMANDS = new Set(['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite', 'hello', 'hi']);
 const GREETING_REGEX = /\b(oi|ol[áa]|bom dia|boa tarde|boa noite|e ai|e aí|opa|tudo bem|tudo bom|hello|hi)\b/i;
+const CHILDREN_WORD_PATTERN = 'crian\\w*';
 const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
   unidade_botanico: { name: 'Jardim Botânico', storeId: 'a99c098f-c16b-4168-a5b1-54e76aa1a855' },
   unidade_cabral: { name: 'Cabral', storeId: 'c6919b3c-f5ff-4006-a226-2b493d9d8cf5' },
@@ -179,12 +220,38 @@ const UNIT_CONFIG: Record<string, { name: string; storeId: string }> = {
 
 const UNIT_PHONE_BY_NAME: Record<string, string> = {
   'Jardim Botânico': '(41) 3092-0449',
-  'Cabral': '(41) 99288-6397',
-  'Água Verde': '(41) 98811-6685',
+  'Cabral': '(41) 3352-8661',
+  'Água Verde': '(41) 3082-5439',
   'Batel': '(41) 3203-4940',
   'Portão': '(41) 3083-7600',
   'Londrina': '(43) 3398-9191',
   'São Paulo': '(11) 5432-0052'
+};
+
+const UNIT_MANAGER_ASSIGNEE_BY_NAME: Record<string, number> = {
+  'Jardim Botânico': 15,
+  'Cabral': 23,
+  'Água Verde': 19,
+  'Batel': 17,
+  'Portão': 21,
+  'Londrina': 25,
+  'São Paulo': 27
+};
+
+const CHATWOOT_TEAM_IDS = {
+  financeiro: 1,
+  compras: 2,
+  rh: 4,
+  central: 5
+} as const;
+
+const DELIVERY_HELP_PHONE_BY_CONTEXT: Record<string, string> = {
+  'Cabral': '(41) 99288-6397',
+  'Jardim Botânico': '(41) 99288-6397',
+  'Água Verde': '(41) 98811-6685',
+  'Batel': '(41) 98811-6685',
+  'Portão': '(41) 98811-6685',
+  'Londrina': '(41) 99265-3755'
 };
 
 const UNIT_TEXT_MATCHERS: Array<{ rx: RegExp; id: keyof typeof UNIT_CONFIG }> = [
@@ -196,6 +263,16 @@ const UNIT_TEXT_MATCHERS: Array<{ rx: RegExp; id: keyof typeof UNIT_CONFIG }> = 
   { rx: /\blondrina\b/, id: 'unidade_londrina' },
   { rx: /\bsao\s*paulo\b/, id: 'unidade_saopaulo' }
 ];
+
+const HELP_UNIT_CONFIG: Record<string, keyof typeof UNIT_CONFIG> = {
+  help_unit_botanico: 'unidade_botanico',
+  help_unit_cabral: 'unidade_cabral',
+  help_unit_agua_verde: 'unidade_agua_verde',
+  help_unit_batel: 'unidade_batel',
+  help_unit_portao: 'unidade_portao',
+  help_unit_londrina: 'unidade_londrina',
+  help_unit_saopaulo: 'unidade_saopaulo'
+};
 
 const CHATWOOT_COMMAND_LABELS: Record<string, string> = {
   MENU_PRINCIPAL: 'Menu principal',
@@ -221,7 +298,24 @@ const CHATWOOT_COMMAND_LABELS: Record<string, string> = {
   delivery_saopaulo: 'Delivery Sao Paulo',
   delivery_novo: 'Delivery novo pedido',
   delivery_ajuda: 'Delivery preciso de ajuda',
-  menu_kids: 'Menu Espaco Kids'
+  menu_kids: 'Menu Espaco Kids',
+  menu_help: 'Menu legado de ajuda',
+  help_lost_found: 'Achados e Perdidos',
+  help_unit_contact: 'Ajuda Contato da unidade',
+  help_unit_botanico: 'Ajuda Jardim Botanico',
+  help_unit_cabral: 'Ajuda Cabral',
+  help_unit_agua_verde: 'Ajuda Agua Verde',
+  help_unit_batel: 'Ajuda Batel',
+  help_unit_portao: 'Ajuda Portao',
+  help_unit_londrina: 'Ajuda Londrina',
+  help_unit_saopaulo: 'Ajuda Sao Paulo',
+  menu_public_admin: 'Menu público Administração',
+  public_admin_rh: 'Administração RH',
+  public_admin_compras: 'Administração Compras',
+  public_admin_financeiro: 'Administração Financeiro',
+  public_admin_feedback: 'Administração Sugestões e Críticas',
+  public_admin_rh_employee: 'Administração RH já sou funcionário',
+  public_admin_rh_candidate: 'Administração RH não sou funcionário'
 };
 
 // Bot message patterns to ignore (echo detection)
@@ -257,6 +351,63 @@ function normalizeForOutboundDedupe(text: string): string {
 
 function normalizeUnitName(value: string): string {
   return (value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function getUnitManagerAssigneeId(unitName?: string): number | null {
+  if (!unitName) return null;
+  return UNIT_MANAGER_ASSIGNEE_BY_NAME[unitName] || null;
+}
+
+async function assignChatwootConversationToUnitManager(
+  phone: string,
+  unitName?: string,
+  reason?: string
+): Promise<void> {
+  const assigneeId = getUnitManagerAssigneeId(unitName);
+  if (!assigneeId) return;
+
+  try {
+    await chatwootService.updateConversation(phone, {
+      assignee_id: assigneeId,
+      status: 'open',
+      custom_attributes: {
+        route_reason: reason || 'unit_contact',
+        routed_unit: unitName
+      }
+    });
+    console.log(`[Chatwoot] Routed ${phone} to unit manager ${unitName} (${assigneeId}) due to ${reason || 'unit_contact'}`);
+  } catch (err: any) {
+    console.error('[Chatwoot] Failed to route conversation to unit manager:', err?.message || err);
+  }
+}
+
+async function assignChatwootConversationToTeam(
+  phone: string,
+  teamId: number,
+  teamName: string,
+  reason: string
+): Promise<void> {
+  try {
+    await chatwootService.updateConversation(phone, {
+      team_id: teamId,
+      status: 'open',
+      custom_attributes: {
+        route_reason: reason,
+        routed_team: teamName
+      }
+    });
+    console.log(`[Chatwoot] Routed ${phone} to team ${teamName} (${teamId}) due to ${reason}`);
+  } catch (err: any) {
+    console.error('[Chatwoot] Failed to route conversation to team:', err?.message || err);
+  }
+}
+
+async function addPrivateChatwootNote(phone: string, content: string): Promise<void> {
+  try {
+    await chatwootService.syncMessage(phone, phone, content, 'outgoing', { source: 'bot', kind: 'internal_note' }, true);
+  } catch (err: any) {
+    console.error('[Chatwoot] Failed to add private note:', err?.message || err);
+  }
 }
 
 function formatBrazilPhone(raw: string): string {
@@ -338,6 +489,10 @@ function clearAdminState(state: UserState): void {
   delete state.admin;
 }
 
+function clearHelpState(state: UserState): void {
+  delete state.help;
+}
+
 function clearAdminReservationState(state: UserState): void {
   if (!state.admin) return;
   delete state.admin.reservation_view;
@@ -353,6 +508,33 @@ function clearAdminReservationCreateState(state: UserState): void {
   delete state.admin.draft_reservation;
 }
 
+function formatLeadHoursLabel(hours: number): string {
+  return `${hours} ${hours === 1 ? 'hora' : 'horas'}`;
+}
+
+async function getCurrentReservationLeadMinutes(): Promise<number> {
+  const now = Date.now();
+  if (reservationLeadMinutesCache && (now - reservationLeadMinutesCache.at) <= RESERVATION_LEAD_MINUTES_CACHE_TTL_MS) {
+    return reservationLeadMinutesCache.value;
+  }
+
+  const value = await getReservationLeadMinutes();
+  reservationLeadMinutesCache = { value, at: now };
+  return value;
+}
+
+async function updateReservationLeadMinutes(minutes: number): Promise<number> {
+  const saved = await setReservationLeadMinutes(minutes);
+  reservationLeadMinutesCache = { value: saved, at: Date.now() };
+  return saved;
+}
+
+function parseLeadTimeHoursInput(text: string): number | null {
+  const parsed = Number(String(text || '').trim().replace(/[^\d]/g, ''));
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 24) return null;
+  return parsed;
+}
+
 function timeToMinutes(value?: string): number | null {
   const normalized = normalizeTime(String(value || '').trim());
   const match = normalized.match(/^(\d{2}):(\d{2})$/);
@@ -361,8 +543,9 @@ function timeToMinutes(value?: string): number | null {
 }
 
 function minutesToTime(totalMinutes: number): string {
-  const hour = Math.floor(totalMinutes / 60);
-  const minute = totalMinutes % 60;
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
@@ -381,6 +564,49 @@ function weekdayKeyFromIso(date: string): string | null {
   return map[weekday] || null;
 }
 
+function pickBalancedAlternativeMinutes(candidates: number[], requestedMinutes: number, limit: number): number[] {
+  const before = candidates
+    .filter((minutes) => minutes < requestedMinutes)
+    .sort((a, b) => b - a);
+  const after = candidates
+    .filter((minutes) => minutes > requestedMinutes)
+    .sort((a, b) => a - b);
+  const exact = candidates
+    .filter((minutes) => minutes === requestedMinutes)
+    .sort((a, b) => a - b);
+
+  const picked: number[] = [];
+  let beforeIndex = 0;
+  let afterIndex = 0;
+  let exactIndex = 0;
+
+  while (picked.length < limit) {
+    let added = false;
+
+    if (exactIndex < exact.length) {
+      picked.push(exact[exactIndex++]);
+      added = true;
+      if (picked.length >= limit) break;
+    }
+
+    if (beforeIndex < before.length) {
+      picked.push(before[beforeIndex++]);
+      added = true;
+      if (picked.length >= limit) break;
+    }
+
+    if (afterIndex < after.length) {
+      picked.push(after[afterIndex++]);
+      added = true;
+      if (picked.length >= limit) break;
+    }
+
+    if (!added) break;
+  }
+
+  return picked;
+}
+
 async function suggestReservationAlternativeTimes(
   storeId: string,
   unitName: string,
@@ -396,34 +622,41 @@ async function suggestReservationAlternativeTimes(
   const store = stores.find((s: any) => String(s?.id || '').toLowerCase() === String(storeId).toLowerCase());
   const dayInfo = store?.operationHours?.[weekdayKey];
   const openMinutes = timeToMinutes(dayInfo?.open);
-  const closeMinutes = timeToMinutes(dayInfo?.close);
-  if (!store || !dayInfo || dayInfo.isOpen === false || openMinutes === null || closeMinutes === null || openMinutes >= closeMinutes) {
+  const rawCloseMinutes = timeToMinutes(dayInfo?.close);
+  if (!store || !dayInfo || dayInfo.isOpen === false || openMinutes === null || rawCloseMinutes === null) {
     return [];
   }
+  const closeMinutes = rawCloseMinutes <= openMinutes ? rawCloseMinutes + 1440 : rawCloseMinutes;
+  const lastReservableMinutes = closeMinutes - RESERVATION_CLOSING_BUFFER_MINUTES;
+  if (lastReservableMinutes <= openMinutes) return [];
 
-  const requestedMinutes = timeToMinutes(requestedTime) ?? openMinutes;
+  const rawRequestedMinutes = timeToMinutes(requestedTime);
+  const requestedMinutes =
+    rawRequestedMinutes === null
+      ? openMinutes
+      : (closeMinutes > 1440 && rawRequestedMinutes < openMinutes ? rawRequestedMinutes + 1440 : rawRequestedMinutes);
   const blocks = (await listReservationBlocks(true, 500)).filter((item) =>
     item.store_id === storeId && (item.weekday === null || item.weekday === weekday)
   );
   const blockRanges = blocks
     .map((item) => ({ start: timeToMinutes(item.start_time), end: timeToMinutes(item.end_time) }))
     .filter((item): item is { start: number; end: number } => item.start !== null && item.end !== null && item.start < item.end);
+  const leadMinutes = await getCurrentReservationLeadMinutes();
+  const minAllowedAt = leadMinutes > 0 ? Date.now() + (leadMinutes * 60 * 1000) : 0;
 
   const candidates: number[] = [];
-  for (let minutes = openMinutes; minutes < closeMinutes; minutes += 30) {
+  for (let minutes = openMinutes; minutes < lastReservableMinutes; minutes += 30) {
     const time = minutesToTime(minutes);
-    if (getReservationLeadTimeViolation(date, time, unitName)) continue;
+    if (leadMinutes > 0) {
+      const candidateAt = buildReservationDateTime(date, time);
+      if (!candidateAt || candidateAt.getTime() < minAllowedAt) continue;
+    }
     const blocked = blockRanges.some((range) => range.start <= minutes && range.end > minutes);
     if (blocked) continue;
     candidates.push(minutes);
   }
 
-  const rankedCandidates = candidates
-    .sort((a, b) => {
-      const diff = Math.abs(a - requestedMinutes) - Math.abs(b - requestedMinutes);
-      if (diff !== 0) return diff;
-      return a - b;
-    });
+  const rankedCandidates = pickBalancedAlternativeMinutes(candidates, requestedMinutes, Math.max(10, candidates.length));
 
   let pickedMinutes = rankedCandidates.slice(0, 4);
   if (reservasWebhookApiService.isConfigured() && numberOfPeople > 0) {
@@ -502,13 +735,16 @@ async function buildReservationLeadTimeCustomerMessage(
   requestedTime?: string,
   numberOfPeople = 2
 ): Promise<string> {
+  const leadMinutes = await getCurrentReservationLeadMinutes();
+  const leadHours = Math.max(0, Math.round(leadMinutes / 60));
+  const leadLabel = formatLeadHoursLabel(leadHours);
   const unitLabel = unitName || 'essa unidade';
   const normalizedDate = normalizeIsoDate(String(requestedDate || ''));
   const today = toIsoDate(new Date());
   const isToday = normalizedDate === today;
   const base = isToday
-    ? `Para a unidade ${unitLabel}, com menos de 2 horas de antecedência, não conseguimos confirmar a reserva automática para hoje. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`
-    : `Para a unidade ${unitLabel}, só conseguimos confirmar reservas com pelo menos 2 horas de antecedência. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
+    ? `Para a unidade ${unitLabel}, com menos de ${leadLabel} de antecedência, não conseguimos confirmar a reserva automática para hoje. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`
+    : `Para a unidade ${unitLabel}, só conseguimos confirmar reservas com pelo menos ${leadLabel} de antecedência. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
   const alternativeTimes =
     storeId && requestedDate && requestedTime
       ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime), numberOfPeople)
@@ -519,13 +755,67 @@ async function buildReservationLeadTimeCustomerMessage(
   return `${base}${alternativesText}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
 }
 
-function getReservationLeadTimeViolation(date?: string, time?: string, unitName?: string): string | null {
+async function buildReservationClosingBufferCustomerMessage(
+  storeId?: string,
+  unitName?: string,
+  requestedDate?: string,
+  requestedTime?: string,
+  numberOfPeople = 2
+): Promise<string> {
+  const unitLabel = unitName || 'essa unidade';
+  const base = `Para a unidade ${unitLabel}, não conseguimos confirmar reservas automáticas na última hora antes do fechamento. Nesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
+  const alternativeTimes =
+    storeId && requestedDate && requestedTime
+      ? await suggestReservationAlternativeTimes(storeId, unitLabel, normalizeIsoDate(requestedDate), normalizeTime(requestedTime), numberOfPeople)
+      : [];
+  const alternativesText = alternativeTimes.length > 0
+    ? `\n\nAlguns horários fora desse bloqueio para você tentar nessa unidade: *${alternativeTimes.join('*, *')}*.`
+    : '';
+  return `${base}${alternativesText}\n\nSe quiser, também posso verificar outro horário ou outra unidade para você.`;
+}
+
+async function getReservationLeadTimeViolation(date?: string, time?: string, unitName?: string): Promise<string | null> {
   if (!date || !time) return null;
   const reservationAt = buildReservationDateTime(date, time);
   if (!reservationAt) return null;
-  const minAllowedAt = Date.now() + (MIN_RESERVATION_LEAD_MINUTES * 60 * 1000);
+  const leadMinutes = await getCurrentReservationLeadMinutes();
+  if (leadMinutes <= 0) return null;
+  const minAllowedAt = Date.now() + (leadMinutes * 60 * 1000);
   if (reservationAt.getTime() < minAllowedAt) {
     return unitName || 'lead_time_violation';
+  }
+  return null;
+}
+
+async function getReservationClosingBufferViolation(
+  storeId?: string,
+  date?: string,
+  time?: string,
+  unitName?: string
+): Promise<string | null> {
+  if (!storeId || !date || !time) return null;
+  const weekdayKey = weekdayKeyFromIso(date);
+  if (!weekdayKey) return null;
+
+  const stores = await getStoresWithHours();
+  const store = stores.find((s: any) => String(s?.id || '').toLowerCase() === String(storeId).toLowerCase());
+  const dayInfo = store?.operationHours?.[weekdayKey];
+  const openMinutes = timeToMinutes(dayInfo?.open);
+  const rawCloseMinutes = timeToMinutes(dayInfo?.close);
+  const rawRequestedMinutes = timeToMinutes(time);
+  if (!store || !dayInfo || dayInfo.isOpen === false || openMinutes === null || rawCloseMinutes === null || rawRequestedMinutes === null) {
+    return null;
+  }
+
+  const closeMinutes = rawCloseMinutes <= openMinutes ? rawCloseMinutes + 1440 : rawCloseMinutes;
+  const requestedMinutes =
+    closeMinutes > 1440 && rawRequestedMinutes < openMinutes
+      ? rawRequestedMinutes + 1440
+      : rawRequestedMinutes;
+  const lastReservableMinutes = closeMinutes - RESERVATION_CLOSING_BUFFER_MINUTES;
+  if (lastReservableMinutes <= openMinutes) return unitName || store?.name || 'closing_buffer_violation';
+  if (requestedMinutes >= lastReservableMinutes) {
+    return unitName || store?.name || 'closing_buffer_violation';
   }
   return null;
 }
@@ -676,6 +966,41 @@ function inferCityFromText(text: string): 'Curitiba' | 'Londrina' | 'São Paulo'
   return undefined;
 }
 
+function getDeliveryHelpPhone(unitName?: string, city?: string): string | null {
+  const normalizedUnit = String(unitName || '').trim();
+  if (normalizedUnit && DELIVERY_HELP_PHONE_BY_CONTEXT[normalizedUnit]) {
+    return DELIVERY_HELP_PHONE_BY_CONTEXT[normalizedUnit];
+  }
+
+  const normalizedCity = String(city || '').trim();
+  if (normalizedCity === 'Londrina') return DELIVERY_HELP_PHONE_BY_CONTEXT['Londrina'];
+  return null;
+}
+
+function buildDeliveryHelpMessage(unitName?: string, city?: string): string {
+  const phone = getDeliveryHelpPhone(unitName, city);
+  if (unitName && phone) {
+    return `Claro! Para *ajuda com pedido de delivery* da unidade *${unitName}*, fale com a equipe por este número:\n\n📱 *${phone}*\n\nEsse contato é exclusivo para suporte de pedidos/delivery.`;
+  }
+
+  if (city === 'Londrina' && phone) {
+    return `Claro! Para *ajuda com pedido de delivery* em *Londrina*, fale com a equipe por este número:\n\n📱 *${phone}*\n\nEsse contato é exclusivo para suporte de pedidos/delivery.`;
+  }
+
+  return [
+    'Claro! Para *ajuda com pedido de delivery*, use estes contatos:',
+    '',
+    '*Curitiba*',
+    '- *Água Verde / Batel / Portão:* (41) 98811-6685',
+    '- *Cabral / Jardim Botânico:* (41) 99288-6397',
+    '',
+    '*Londrina*',
+    '- (41) 99265-3755',
+    '',
+    'Esses números são exclusivos para suporte de pedidos/delivery.'
+  ].join('\n');
+}
+
 function getCardapioCommandFromContext(unitName?: string, city?: string): 'cardapio_curitiba' | 'cardapio_londrina' | 'cardapio_saopaulo' | null {
   const resolvedCity = city || inferCityFromUnitName(unitName);
   if (resolvedCity === 'Londrina') return 'cardapio_londrina';
@@ -820,10 +1145,11 @@ function rememberRecentOutboundContent(userId: string, content: string): void {
 
   const now = Date.now();
   const hash = normalizeForOutboundDedupe(trimmed);
+  const normalizedContent = normalizeIntentText(trimmed);
   const recent = (recentOutboundContentByUser.get(userId) || [])
     .filter((entry) => now - entry.at <= RECENT_OUTBOUND_WINDOW_MS);
 
-  recent.push({ at: now, hash });
+  recent.push({ at: now, hash, content: normalizedContent });
   recentOutboundContentByUser.set(userId, recent);
 }
 
@@ -833,12 +1159,17 @@ function getRecentOutboundContents(userId: string): string[] {
     .filter((entry) => now - entry.at <= RECENT_OUTBOUND_WINDOW_MS);
   if (recent.length === 0) return [];
   recentOutboundContentByUser.set(userId, recent);
-  return recent.map((entry) => entry.hash);
+  return recent.map((entry) => entry.content || entry.hash);
 }
 
 function recentlyPromptedDeliveryCities(userId: string): boolean {
   const recent = getRecentOutboundContents(userId);
   return recent.some((content) => content.includes('de qual cidade voce esta pedindo') || content.includes('cidades com delivery'));
+}
+
+function recentlyPromptedReservationUnit(userId: string): boolean {
+  const recent = getRecentOutboundContents(userId);
+  return recent.some((content) => content.includes('qual unidade voce deseja') || content.includes('unidades kharina'));
 }
 
 export function wasRecentlyMirroredByBot(userId: string, content: string, windowMs = RECENT_OUTBOUND_WINDOW_MS): boolean {
@@ -915,16 +1246,18 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     updates.kids = 0;
   } else {
     const kidsMatch =
-      tNoAccent.match(/\b(\d+)\s*[:\-]?\s*(crianca|criancas)\b/) ||
-      tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*[:\\-]?\\s*(crianca|criancas)\\b`));
+      tNoAccent.match(new RegExp(`\\b(\\d+)\\s*[:\\-]?\\s*(${CHILDREN_WORD_PATTERN})\\b`)) ||
+      tNoAccent.match(new RegExp(`\\b(${PT_NUMBER_TOKEN_PATTERN})\\s*[:\\-]?\\s*(${CHILDREN_WORD_PATTERN})\\b`)) ||
+      tNoAccent.match(new RegExp(`\\b(${CHILDREN_WORD_PATTERN})\\b(?:\\s+(?:umas?|cerca\\s+de|mais\\s+ou\\s+menos))?\\s+(${PT_NUMBER_TOKEN_PATTERN})\\b`));
     if (kidsMatch) {
-      const k = parsePtNumberToken(kidsMatch[1]);
+      const rawKidsValue = kidsMatch[2] && new RegExp(CHILDREN_WORD_PATTERN).test(kidsMatch[1]) ? kidsMatch[2] : kidsMatch[1];
+      const k = parsePtNumberToken(rawKidsValue);
       if (k !== null && k >= 0) updates.kids = k;
     }
   }
 
   const today = new Date();
-  const dmY = tNoAccent.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  const dmY = tNoAccent.match(/\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b/);
   if (dmY) {
     const day = parseInt(dmY[1], 10);
     const mon = parseInt(dmY[2], 10);
@@ -1010,7 +1343,7 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     hh = hm[1];
     mm = hm[2];
   } else {
-    const hOnly = tNoAccent.match(/\b(\d{1,2})\s*(h|hr|hrs|hora|horas)\b/);
+    const hOnly = tNoAccent.match(/\b(\d{1,2})\s*(h|hs|hr|hrs|hora|horas)\b/);
     if (!hh && hOnly) hh = hOnly[1];
     else {
       const hWord = tNoAccent.match(/\b(?:as)\s*(\d{1,2})\b/);
@@ -1029,7 +1362,11 @@ function parseReservationDetails(text: string): Partial<ReservationState> {
     'docinho', 'docinhos', 'mesa embaixo', 'mesa em baixo', 'mesa em cima',
     'cadeira de bebe', 'cadeirinha', 'cadeirante', 'acessivel', 'acessível',
     'alerg', 'intoler', 'sem gluten', 'sem glúten', 'vegano', 'vegetar',
-    'evento', 'atras', 'atrasar', 'varia', 'aprox', 'aproxim', 'juntar as mesas'
+    'evento', 'atras', 'atrasar', 'varia', 'aprox', 'aproxim', 'juntar as mesas',
+    'espaco kids', 'espaço kids', 'vista para o espaco kids', 'vista para o espaço kids',
+    'frente para o espaco kids', 'frente para o espaço kids', 'de frente para o espaco kids',
+    'de frente para o espaço kids', 'area kids', 'área kids', 'perto da area kids',
+    'perto da área kids', 'perto do kids', 'proximo da area kids', 'proximo da área kids'
   ];
   const hasNoteMarker = noteMarkers.some((m) => tNoAccent.includes(m));
   const onlyKidsAnswer = /^(\s*(sem crian|nao|nenhuma|0)\s*)+$/.test(tNoAccent);
@@ -1056,6 +1393,30 @@ function extractStandalonePeople(text: string): number | null {
   const n = parsePtNumberToken(m[1]);
   if (n === null || n <= 0 || n > 30) return null;
   return n;
+}
+
+function extractStandaloneTime(text: string): string | null {
+  const t = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  if (!t) return null;
+
+  const explicitHm = t.match(/^(\d{1,2})(?::|h)(\d{2})\s*h?s?$/);
+  if (explicitHm) {
+    const hh = parseInt(explicitHm[1], 10);
+    const mm = parseInt(explicitHm[2], 10);
+    if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) {
+      return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+  }
+
+  const explicitHour = t.match(/^(\d{1,2})\s*(h|hs|hr|hrs|hora|horas)?$/);
+  if (!explicitHour) return null;
+  const hh = parseInt(explicitHour[1], 10);
+  if (hh < 0 || hh > 23) return null;
+  return `${String(hh).padStart(2, '0')}:00`;
 }
 
 function extractExplicitNameUpdate(text: string, opts?: { allowBareName?: boolean }): string | null {
@@ -1179,6 +1540,67 @@ function sanitizeAgentFallbackPhone(text: string, from: string, state?: UserStat
     const digits = raw.replace(/\D/g, '');
     return digits === fromDigits ? unitPhone : raw;
   });
+}
+
+function sanitizeReservationTimingResponse(text: string, state?: UserState): string {
+  if (!text) return text;
+  const raw = String(text).trim();
+  const normalized = normalizeIntentText(raw);
+  const mentionsOrderArrival = normalized.includes('ordem de chegada');
+  if (mentionsOrderArrival) return raw;
+
+  const looksLikeReservationTimingDenial =
+    (
+      normalized.includes('reserva') ||
+      normalized.includes('reservar')
+    ) &&
+    (
+      normalized.includes('horario') ||
+      normalized.includes('hora') ||
+      normalized.includes('antecedencia') ||
+      normalized.includes('indisponivel') ||
+      normalized.includes('disponibilidade')
+    ) &&
+    (
+      normalized.includes('nao') ||
+      normalized.includes('infelizmente') ||
+      normalized.includes('nao conseguimos') ||
+      normalized.includes('nao temos')
+    );
+
+  if (!looksLikeReservationTimingDenial) return raw;
+
+  const unitName = String(state?.preferred_unit_name || '').trim();
+  const invite = unitName
+    ? `\n\nNesse caso, o atendimento na unidade *${unitName}* será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`
+    : `\n\nNesse caso, o atendimento será por ordem de chegada ao restaurante. Ficaremos felizes em receber vocês por aqui.`;
+
+  return `${raw}${invite}`;
+}
+
+function sanitizeIncompleteReservationFallback(text: string, state?: UserState): string {
+  const raw = String(text || '').trim();
+  if (!raw || !state?.reservation || !isInActiveFlow(state)) return raw;
+
+  const missing = getMissingReservationFields(state.reservation);
+  if (missing.length === 0) return raw;
+
+  const normalized = normalizeIntentText(raw);
+  const looksLikeStaleReservationDenial =
+    normalized.includes('ja passaram') ||
+    normalized.includes('já passaram') ||
+    normalized.includes('novo horario') ||
+    normalized.includes('novo horário') ||
+    normalized.includes('nova data') ||
+    normalized.includes('escolher um novo horario') ||
+    normalized.includes('escolher um novo horário') ||
+    normalized.includes('escolher outro horario') ||
+    normalized.includes('escolher outro horário') ||
+    normalized.includes('que tal escolher');
+
+  if (!looksLikeStaleReservationDenial) return raw;
+
+  return `Perfeito! ✅ Agora me confirma ${missing.join(' e ')}.`;
 }
 
 function shouldOfferMainMenu(result: any, state?: UserState): boolean {
@@ -1406,6 +1828,49 @@ function buildReservationIdentifierLines(picked: { id?: string; code?: string })
   ].filter(Boolean);
 }
 
+async function getReservationConfirmationSnapshot(input: {
+  picked: { id?: string; code?: string; status?: string };
+  fallbackDate: string;
+  fallbackTime: string;
+  fallbackStoreId?: string;
+  fallbackStoreName: string;
+  fallbackTotalPeople: number;
+  fallbackKids: number;
+}): Promise<ReservationConfirmationSnapshot> {
+  const fallback: ReservationConfirmationSnapshot = {
+    id: input.picked.id,
+    code: input.picked.code,
+    status: input.picked.status,
+    date: normalizeIsoDate(input.fallbackDate) || input.fallbackDate,
+    time: normalizeTime(input.fallbackTime),
+    storeId: input.fallbackStoreId,
+    storeName: input.fallbackStoreName,
+    totalPeople: Number(input.fallbackTotalPeople || 0),
+    kids: Number(input.fallbackKids || 0)
+  };
+
+  const reservationId = String(input.picked.id || '').trim();
+  if (!reservationId || !reservasAdminApiService.isConfigured()) return fallback;
+
+  try {
+    const saved = await reservasAdminApiService.getReservationById(reservationId);
+    return {
+      id: String(saved.id || reservationId),
+      code: displayReservationCode({ id: saved.id || reservationId, code: input.picked.code }),
+      status: String(saved.status || input.picked.status || ''),
+      date: normalizeIsoDate(String(saved.date || '')) || fallback.date,
+      time: normalizeTime(String(saved.time || '')) || fallback.time,
+      storeId: String(saved.storeId || saved.store?.id || input.fallbackStoreId || ''),
+      storeName: String(saved.store?.name || input.fallbackStoreName || '').trim() || fallback.storeName,
+      totalPeople: Number(saved.guests ?? input.fallbackTotalPeople ?? 0),
+      kids: Number(saved.kids ?? input.fallbackKids ?? 0)
+    };
+  } catch (err: any) {
+    console.error('[ReservasDeterministic] getReservationById failed:', err?.message || err);
+    return fallback;
+  }
+}
+
 function statusLabel(raw: any): string {
   const v = String(raw || '').toLowerCase();
   const map: Record<string, string> = {
@@ -1573,6 +2038,24 @@ async function buildCardapioMessage(cardapioCommand: string): Promise<string> {
   return `Perfeito! Aqui está o cardápio de ${cityLabelMap[city] || city} 🍽️\n👉 ${url}`;
 }
 
+async function buildHappyHourCardapioMessage(unitName?: string, city?: string): Promise<string | null> {
+  const cardapioCommand = getCardapioCommandFromContext(unitName, city);
+  if (!cardapioCommand) return null;
+
+  const cardapioText = await buildCardapioMessage(cardapioCommand);
+  const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+
+  return [
+    'Claro. Para consultar os itens do *Happy Hour*, use este cardápio:',
+    '',
+    cardapioText,
+    '',
+    unitPhone
+      ? `Se quiser confirmar itens ou valores do *Happy Hour* na unidade *${unitName}*, fale com a equipe pelo telefone *${unitPhone}*.`
+      : 'Se quiser, eu também posso te passar o telefone da unidade para confirmar itens e valores do *Happy Hour*.'
+  ].join('\n');
+}
+
 async function buildKidsInfoMessage(): Promise<string> {
   const base = await db.getConfig('kids_info_content');
   const configs = await db.listConfigs();
@@ -1607,6 +2090,18 @@ type ActiveReservation = {
   status: string;
 };
 
+type ReservationConfirmationSnapshot = {
+  id?: string;
+  code?: string;
+  status?: string;
+  date: string;
+  time: string;
+  storeId?: string;
+  storeName: string;
+  totalPeople: number;
+  kids: number;
+};
+
 type ReservationMatchInput = {
   phone: string;
   storeId: string;
@@ -1631,24 +2126,40 @@ function phonesLookEquivalent(aRaw: string, bRaw: string): boolean {
   );
 }
 
-function adminReservationMatchesInput(item: any, input: ReservationMatchInput): boolean {
+function adminReservationMatchesBase(item: any, input: ReservationMatchInput): boolean {
   const itemDate = normalizeIsoDate(String(item?.date || ''));
   const itemTime = normalizeTime(String(item?.time || ''));
   const itemStoreId = String(item?.storeId || item?.store?.id || '').toLowerCase();
   const itemStatus = String(item?.status || '').toLowerCase();
   const itemPhone = String(item?.customerPhone || item?.clientPhone || item?.phone || '');
-  const guests = Number(item?.guests ?? item?.numberOfPeople ?? item?.people ?? 0);
-  const kids = Number(item?.kids ?? 0);
-  const possibleTotals = new Set<number>([guests, guests + kids]);
 
   return (
     itemDate === input.date &&
     itemTime === input.time &&
     itemStoreId === String(input.storeId).toLowerCase() &&
     !itemStatus.includes('cancel') &&
-    phonesLookEquivalent(itemPhone, input.phone) &&
-    possibleTotals.has(Number(input.people))
+    phonesLookEquivalent(itemPhone, input.phone)
   );
+}
+
+function adminReservationMatchesExactPeople(item: any, input: ReservationMatchInput): boolean {
+  const guests = Number(item?.guests ?? item?.numberOfPeople ?? item?.people ?? 0);
+  const kids = Number(item?.kids ?? 0);
+  const possibleTotals = new Set<number>([guests, guests + kids]);
+  return possibleTotals.has(Number(input.people));
+}
+
+function adminReservationLikelyRecentCreate(item: any, input: ReservationMatchInput): boolean {
+  const notes = normalizeIntentText(String(item?.notes || ''));
+  const mentionsExpectedParty =
+    notes.includes(`total ${input.people}`) ||
+    notes.includes(`${input.people} pessoas`) ||
+    notes.includes(`${input.people} pessoa`);
+
+  const createdAt = Date.parse(String(item?.createdAt || item?.updatedAt || ''));
+  const isRecent = Number.isFinite(createdAt) && Math.abs(Date.now() - createdAt) <= 30 * 60 * 1000;
+
+  return mentionsExpectedParty || isRecent;
 }
 
 function extractReservationsList(payload: any): any[] {
@@ -1842,7 +2353,9 @@ async function findReservationMatchViaAdmin(input: ReservationMatchInput): Promi
       page: 1,
       limit: 100
     });
-    const matched = (byStore.data || []).find((item) => adminReservationMatchesInput(item, input));
+    const baseMatches = (byStore.data || []).filter((item) => adminReservationMatchesBase(item, input));
+    const exactMatch = baseMatches.find((item) => adminReservationMatchesExactPeople(item, input));
+    const matched = exactMatch || (baseMatches.length === 1 && adminReservationLikelyRecentCreate(baseMatches[0], input) ? baseMatches[0] : null);
     if (matched?.id) {
       return {
         id: String(matched.id),
@@ -1869,7 +2382,9 @@ async function findReservationMatchViaAdmin(input: ReservationMatchInput): Promi
         page: 1,
         limit: 50
       });
-      const matched = (response.data || []).find((item) => adminReservationMatchesInput(item, input));
+      const baseMatches = (response.data || []).filter((item) => adminReservationMatchesBase(item, input));
+      const exactMatch = baseMatches.find((item) => adminReservationMatchesExactPeople(item, input));
+      const matched = exactMatch || (baseMatches.length === 1 && adminReservationLikelyRecentCreate(baseMatches[0], input) ? baseMatches[0] : null);
       if (matched?.id) {
         return {
           id: String(matched.id),
@@ -2044,6 +2559,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
   const totalPeople = adults + kids;
   const name = String(r.name || '').trim();
   const notes = String(r.notes || r.occasion || '').trim();
+  let attemptId = Number(r.pending_attempt_id || 0) || undefined;
 
   if (!storeId || !phone || !date || !time || !adults || !name) {
     return {
@@ -2052,13 +2568,23 @@ async function createReservationDeterministic(from: string, state: UserState): P
     };
   }
 
-  const leadTimeViolation = getReservationLeadTimeViolation(date, time, unitName);
+  const leadTimeViolation = await getReservationLeadTimeViolation(date, time, unitName);
   if (leadTimeViolation) {
     if (state.reservation) state.reservation.awaiting_confirmation = false;
     userStates.set(from, state);
     return {
       ok: false,
       message: await buildReservationLeadTimeCustomerMessage(storeId, unitName, date, time, totalPeople)
+    };
+  }
+
+  const closingBufferViolation = await getReservationClosingBufferViolation(storeId, date, time, unitName);
+  if (closingBufferViolation) {
+    if (state.reservation) state.reservation.awaiting_confirmation = false;
+    userStates.set(from, state);
+    return {
+      ok: false,
+      message: await buildReservationClosingBufferCustomerMessage(storeId, unitName, date, time, totalPeople)
     };
   }
 
@@ -2088,19 +2614,67 @@ async function createReservationDeterministic(from: string, state: UserState): P
   };
 
   try {
+    attemptId = await beginReservationAttempt({
+      phone,
+      storeId,
+      storeName: unitName,
+      customerName: name,
+      dateText: date,
+      timeText: time,
+      adults,
+      kids,
+      totalPeople,
+      notes
+    });
+    if (state.reservation) {
+      state.reservation.pending_attempt_id = attemptId;
+      userStates.set(from, state);
+    }
+    await syncReservationVerificationState(from, {
+      attemptId,
+      status: 'creating',
+      storeName: unitName,
+      dateText: date,
+      timeText: time
+    });
+
     // If client pressed confirm again, avoid duplicate creates and try to recover existing reservation first.
     const preExisting = await waitForReservationMatchWithId({ phone, storeId, date, time, people: totalPeople }, 2, 600);
     if (preExisting?.id) {
-      const recoveredStatus = preExisting.status ? statusLabel(preExisting.status) : undefined;
+      const confirmed = await getReservationConfirmationSnapshot({
+        picked: preExisting,
+        fallbackDate: date,
+        fallbackTime: time,
+        fallbackStoreId: storeId,
+        fallbackStoreName: unitName,
+        fallbackTotalPeople: totalPeople,
+        fallbackKids: kids
+      });
+      await updateReservationAttemptStatus(attemptId, 'confirmed_recovered', {
+        resolutionSource: 'pre_existing_match',
+        reservationId: String(confirmed.id || ''),
+        reservationCode: displayReservationCode(confirmed)
+      });
+      await syncReservationVerificationState(from, {
+        attemptId,
+        status: 'confirmed_recovered',
+        storeName: confirmed.storeName,
+        dateText: confirmed.date,
+        timeText: confirmed.time,
+        reservationId: String(confirmed.id || ''),
+        reservationCode: displayReservationCode(confirmed),
+        resolutionSource: 'pre_existing_match'
+      });
+      const recoveredStatus = confirmed.status ? statusLabel(confirmed.status) : undefined;
       const recoveredLines = [
-        `Reserva confirmada com sucesso na unidade ${unitName}! 🎉`,
-        `📅 Data: ${toBrDate(date)}`,
-        `⏰ Horário: ${time}`,
+        `Reserva confirmada com sucesso na unidade ${confirmed.storeName}! 🎉`,
+        `📅 Data: ${toBrDate(confirmed.date)}`,
+        `⏰ Horário: ${confirmed.time}`,
         `👨 Adultos: ${adults}`,
         `👶 Crianças: ${kids}`,
         `👥 Total: ${totalPeople}`,
-        ...buildReservationIdentifierLines(preExisting),
-        recoveredStatus ? `${statusEmoji(preExisting.status)} Status: ${recoveredStatus}` : ''
+        ...buildReservationIdentifierLines(confirmed),
+        recoveredStatus ? `${statusEmoji(confirmed.status)} Status: ${recoveredStatus}` : ''
       ].filter(Boolean);
       state.reservation = undefined;
       userStates.set(from, state);
@@ -2108,6 +2682,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     }
 
     let createResult: any;
+    let createResultHadIdentifier = false;
     try {
       createResult = await callReservasToolWithTimeout(
         'create_reservation',
@@ -2133,6 +2708,7 @@ async function createReservationDeterministic(from: string, state: UserState): P
     }
 
     let picked = pickReservationCode(createResult);
+    createResultHadIdentifier = !!picked.id;
 
     // Poll verification for eventual consistency in Reservas API.
     const matched = await waitForReservationMatchWithId({ phone, storeId, date, time, people: totalPeople }, 8, 1500);
@@ -2191,8 +2767,20 @@ async function createReservationDeterministic(from: string, state: UserState): P
       if (state.reservation) {
         state.reservation.awaiting_confirmation = false;
         state.reservation.awaiting_manual_review = true;
+        state.reservation.manual_review_last_notice_at = Date.now();
         userStates.set(from, state);
       }
+      await updateReservationAttemptStatus(attemptId, 'manual_review', {
+        resolutionSource: 'missing_reservation_id'
+      });
+      await syncReservationVerificationState(from, {
+        attemptId,
+        status: 'manual_review',
+        storeName: unitName,
+        dateText: date,
+        timeText: time,
+        resolutionSource: 'missing_reservation_id'
+      });
       const alertMsg = [
         'ALERTA RESERVA: criação sem ID confirmado.',
         `Telefone: +${phone}`,
@@ -2215,13 +2803,23 @@ async function createReservationDeterministic(from: string, state: UserState): P
       ).catch((err) => {
         console.error('[Chatwoot] reservation alert failed:', err?.message || err);
       });
+      await assignChatwootConversationToUnitManager(from, unitName, 'reservation_manual_review');
       return {
         ok: false,
         message: 'Tive uma instabilidade para confirmar sua reserva com segurança agora 😕\nPor favor, tente novamente em alguns minutos. Se preferir, nosso time já foi alertado para verificar por aqui.'
       };
     }
 
-    const status = picked.status ? statusLabel(picked.status) : undefined;
+    const confirmed = await getReservationConfirmationSnapshot({
+      picked,
+      fallbackDate: date,
+      fallbackTime: time,
+      fallbackStoreId: storeId,
+      fallbackStoreName: unitName,
+      fallbackTotalPeople: totalPeople,
+      fallbackKids: kids
+    });
+    const status = confirmed.status ? statusLabel(confirmed.status) : undefined;
     const previousReservationId = String(r.pending_change_source_id || '').trim();
     const previousReservationCode = String(r.pending_change_source_code || '').trim();
 
@@ -2238,9 +2836,9 @@ async function createReservationDeterministic(from: string, state: UserState): P
 
     const lines = [
       `Reserva confirmada com sucesso! 🎉`,
-      `Nos vemos dia ${toBrDate(date)} às ${time}h na unidade ${unitName}! 🧡`,
+      `Nos vemos dia ${toBrDate(confirmed.date)} às ${confirmed.time}h na unidade ${confirmed.storeName}! 🧡`,
       '',
-      ...buildReservationIdentifierLines(picked),
+      ...buildReservationIdentifierLines(confirmed),
       '',
       '⏰ Lembre-se:',
       '',
@@ -2249,6 +2847,25 @@ async function createReservationDeterministic(from: string, state: UserState): P
       'Depois disso, a reserva é cancelada automaticamente ❤️'
     ].filter(line => line !== '');
 
+    await updateReservationAttemptStatus(
+      attemptId,
+      createResultHadIdentifier ? 'confirmed_bot' : 'confirmed_recovered',
+      {
+        resolutionSource: createResultHadIdentifier ? 'mcp_create' : 'fallback_match',
+        reservationId: String(confirmed.id || ''),
+        reservationCode: displayReservationCode(confirmed)
+      }
+    );
+    await syncReservationVerificationState(from, {
+      attemptId,
+      status: createResultHadIdentifier ? 'confirmed_bot' : 'confirmed_recovered',
+      storeName: confirmed.storeName,
+      dateText: confirmed.date,
+      timeText: confirmed.time,
+      reservationId: String(confirmed.id || ''),
+      reservationCode: displayReservationCode(confirmed),
+      resolutionSource: createResultHadIdentifier ? 'mcp_create' : 'fallback_match'
+    });
     state.reservation = undefined;
     userStates.set(from, state);
     return { ok: true, message: lines.join('\n') };
@@ -2263,12 +2880,36 @@ async function createReservationDeterministic(from: string, state: UserState): P
         2000
       );
       if (recovered?.id) {
-        const recoveredStatus = recovered.status ? statusLabel(recovered.status) : undefined;
+        const confirmed = await getReservationConfirmationSnapshot({
+          picked: recovered,
+          fallbackDate: date,
+          fallbackTime: time,
+          fallbackStoreId: storeId,
+          fallbackStoreName: unitName,
+          fallbackTotalPeople: totalPeople,
+          fallbackKids: kids
+        });
+        await updateReservationAttemptStatus(attemptId, 'confirmed_recovered', {
+          resolutionSource: 'post_error_match',
+          reservationId: String(confirmed.id || ''),
+          reservationCode: displayReservationCode(confirmed)
+        });
+        await syncReservationVerificationState(from, {
+          attemptId,
+          status: 'confirmed_recovered',
+          storeName: confirmed.storeName,
+          dateText: confirmed.date,
+          timeText: confirmed.time,
+          reservationId: String(confirmed.id || ''),
+          reservationCode: displayReservationCode(confirmed),
+          resolutionSource: 'post_error_match'
+        });
+        const recoveredStatus = confirmed.status ? statusLabel(confirmed.status) : undefined;
         const recoveredLines = [
           `Reserva confirmada com sucesso! 🎉`,
-          `Nos vemos dia ${toBrDate(date)} às ${time}h na unidade ${unitName}! 🧡`,
+          `Nos vemos dia ${toBrDate(confirmed.date)} às ${confirmed.time}h na unidade ${confirmed.storeName}! 🧡`,
           '',
-          ...buildReservationIdentifierLines(recovered),
+          ...buildReservationIdentifierLines(confirmed),
           '',
           '⏰ Lembre-se:',
           '',
@@ -2307,9 +2948,24 @@ async function createReservationDeterministic(from: string, state: UserState): P
     ).catch((cwErr) => {
       console.error('[Chatwoot] reservation alert failed:', cwErr?.message || cwErr);
     });
-    if (state.reservation) state.reservation.awaiting_confirmation = true;
+    await updateReservationAttemptStatus(attemptId, 'manual_review', {
+      resolutionSource: 'technical_failure',
+      lastError: String(err?.message || err || 'unknown')
+    });
+    await syncReservationVerificationState(from, {
+      attemptId,
+      status: 'manual_review',
+      storeName: unitName,
+      dateText: date,
+      timeText: time,
+      resolutionSource: 'technical_failure',
+      lastError: String(err?.message || err || 'unknown')
+    });
+    if (state.reservation) state.reservation.awaiting_confirmation = false;
     if (state.reservation) state.reservation.awaiting_manual_review = true;
+    if (state.reservation) state.reservation.manual_review_last_notice_at = Date.now();
     userStates.set(from, state);
+    await assignChatwootConversationToUnitManager(from, unitName, 'reservation_manual_review');
     return {
       ok: false,
       message: 'Tive uma instabilidade para concluir sua reserva agora 😕\nPor favor, tente novamente em alguns minutos. Nosso time também foi alertado para verificar.'
@@ -2486,7 +3142,7 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
       type: "list",
       body: {
         text: compact
-          ? "Se quiser, eu também posso te ajudar com reserva, delivery ou Espaço Kids. 😊\n\nEscolha uma opção:"
+          ? "Se quiser, eu também posso te ajudar com reserva, delivery, Espaço Kids, achados e perdidos ou administração. 😊\n\nEscolha uma opção:"
           : "Opa! 👋 Eu sou a Kha do Kharina 😃\nEscolha uma opção:"
       },
       action: {
@@ -2497,14 +3153,16 @@ async function sendMainMenu(to: string, compact = false): Promise<void> {
             { id: "menu_cardapio", title: "1️⃣ Ver Cardápio" },
             { id: "menu_reserva", title: "2️⃣ Reservar Mesa" },
             { id: "menu_delivery", title: "3️⃣ Delivery 🍟🚀" },
-            { id: "menu_kids", title: "4️⃣ Espaço Kids 🧸" }
+            { id: "menu_kids", title: "4️⃣ Espaço Kids 🧸" },
+            { id: "help_lost_found", title: "5️⃣ Achados e Perdidos 🔎" },
+            { id: "menu_public_admin", title: "6️⃣ Administração 🏢" }
           ]
         }]
       }
     }
   };
   await sendInteractiveWithFallback(to, payload, 'send_main_menu',
-    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids');
+    'Escolha: 1) Ver Cardápio 2) Reservar Mesa 3) Delivery 4) Espaço Kids 5) Achados e Perdidos 6) Administração');
 }
 
 async function sendCitiesMenu(to: string): Promise<void> {
@@ -2559,6 +3217,117 @@ async function sendUnidadesMenu(to: string): Promise<void> {
   };
   await sendInteractiveWithFallback(to, payload, 'send_unidades_menu',
     'Qual unidade? (Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo).');
+}
+
+async function sendHelpMenu(to: string): Promise<void> {
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "Como posso te ajudar?" },
+      action: {
+        button: "Ver opções",
+        sections: [{
+          title: "Ajuda",
+          rows: [
+            { id: "help_lost_found", title: "Achados e Perdidos", description: "Avisar a unidade sobre um item esquecido" },
+            { id: "help_unit_contact", title: "Contato da unidade", description: "Pedir telefone fixo da loja" }
+          ]
+        }]
+      }
+    }
+  };
+  await sendInteractiveWithFallback(to, payload, 'send_help_menu',
+    'Ajuda: Achados e Perdidos ou contato da unidade.');
+}
+
+async function sendPublicAdminMenu(to: string): Promise<void> {
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: 'Qual área administrativa você quer acionar?' },
+      action: {
+        button: 'Ver opções',
+        sections: [{
+          title: 'Administração',
+          rows: [
+            { id: 'public_admin_rh', title: 'RH', description: 'Assuntos de colaboradores e currículos' },
+            { id: 'public_admin_compras', title: 'Compras', description: 'Demandas e contato com compras' },
+            { id: 'public_admin_financeiro', title: 'Financeiro', description: 'Boletos, pagamentos e financeiro' },
+            { id: 'public_admin_feedback', title: 'Sugestões/Críticas', description: 'Feedback geral para a administração' }
+          ]
+        }]
+      }
+    }
+  };
+  await sendInteractiveWithFallback(
+    to,
+    payload,
+    'send_public_admin_menu',
+    'Administração: RH, Compras, Financeiro ou Sugestões/Críticas.'
+  );
+}
+
+async function sendPublicRhMenu(to: string): Promise<void> {
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: 'Para o RH, me diga qual é o seu caso:' },
+      action: {
+        button: 'Ver opções',
+        sections: [{
+          title: 'RH',
+          rows: [
+            { id: 'public_admin_rh_employee', title: 'Já sou funcionário', description: 'Assuntos de colaborador' },
+            { id: 'public_admin_rh_candidate', title: 'Não sou funcionário', description: 'Currículo e interesse em vaga' }
+          ]
+        }]
+      }
+    }
+  };
+  await sendInteractiveWithFallback(
+    to,
+    payload,
+    'send_public_rh_menu',
+    'RH: já sou funcionário ou não sou funcionário.'
+  );
+}
+
+async function sendHelpUnitsMenu(to: string): Promise<void> {
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "Em qual unidade aconteceu?" },
+      action: {
+        button: "Ver unidades",
+        sections: [{
+          title: "Unidades Kharina",
+          rows: [
+            { id: "help_unit_botanico", title: "🌿 Jardim Botânico" },
+            { id: "help_unit_cabral", title: "🏘️ Cabral" },
+            { id: "help_unit_agua_verde", title: "🌳 Água Verde" },
+            { id: "help_unit_batel", title: "🏛️ Batel" },
+            { id: "help_unit_portao", title: "🚪 Portão" },
+            { id: "help_unit_londrina", title: "🏙️ Londrina" },
+            { id: "help_unit_saopaulo", title: "🌆 São Paulo" }
+          ]
+        }]
+      }
+    }
+  };
+  await sendInteractiveWithFallback(to, payload, 'send_help_units_menu',
+    'Em qual unidade aconteceu? Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo.');
 }
 
 async function sendPhoneConfirmation(to: string): Promise<void> {
@@ -2707,14 +3476,15 @@ async function sendAdminMainMenu(to: string, isMaster: boolean): Promise<void> {
   const rows = [
     { id: 'admin_menu_reservations', title: 'Reservas', description: 'Consultar totais e listagens por unidade' },
     { id: 'admin_menu_blocks', title: 'Bloqueios', description: 'Criar, listar e desativar regras' },
+    { id: 'admin_menu_lead_time', title: 'Antecedência', description: 'Gerenciar o prazo mínimo da reserva' },
     { id: 'admin_menu_list_blocks', title: 'Regras ativas', description: 'Ver bloqueios vigentes agora' },
     ...(isMaster ? [{ id: 'admin_menu_admins', title: 'Administradores', description: 'Gerenciar acessos ao menu' }] : []),
     { id: 'admin_menu_exit', title: 'Sair', description: 'Encerrar modo administrativo' }
   ];
 
   const fallbackText = isMaster
-    ? 'Menu admin: 1) Reservas 2) Bloqueios 3) Regras ativas 4) Administradores 5) Sair'
-    : 'Menu admin: 1) Reservas 2) Bloqueios 3) Regras ativas 4) Sair';
+    ? 'Menu admin: 1) Reservas 2) Bloqueios 3) Antecedência 4) Regras ativas 5) Administradores 6) Sair'
+    : 'Menu admin: 1) Reservas 2) Bloqueios 3) Antecedência 4) Regras ativas 5) Sair';
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -2735,6 +3505,44 @@ async function sendAdminMainMenu(to: string, isMaster: boolean): Promise<void> {
     payload,
     'send_admin_main_menu',
     fallbackText
+  );
+}
+
+async function sendAdminLeadTimeMenu(to: string): Promise<void> {
+  const leadMinutes = await getCurrentReservationLeadMinutes();
+  const leadHours = Math.round(leadMinutes / 60);
+  const statusText = leadMinutes > 0
+    ? `Ativo em *${formatLeadHoursLabel(leadHours)}*`
+    : 'Desativado';
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: `Prazo mínimo para reservas automáticas.\n\n*Status atual:* ${statusText}` },
+      action: {
+        button: 'Ver ações',
+        sections: [{
+          title: 'Antecedência',
+          rows: [
+            { id: 'admin_lead_status', title: 'Ver status', description: 'Consultar a regra atual' },
+            { id: 'admin_lead_enable_default', title: 'Ativar 4 horas', description: 'Aplicar o bloqueio padrão de 4 horas' },
+            { id: 'admin_lead_disable', title: 'Desativar', description: 'Remover a antecedência mínima' },
+            { id: 'admin_lead_change', title: 'Alterar prazo', description: 'Definir outro número de horas' },
+            { id: 'admin_menu_back_main', title: 'Voltar', description: 'Retornar ao menu principal' }
+          ]
+        }]
+      }
+    }
+  };
+
+  await sendInteractiveWithFallback(
+    to,
+    payload,
+    'send_admin_lead_time_menu',
+    `Antecedência: status ${leadMinutes > 0 ? `ativo em ${formatLeadHoursLabel(leadHours)}` : 'desativado'} | 1) Ver status 2) Ativar 4 horas 3) Desativar 4) Alterar prazo 5) Voltar`
   );
 }
 
@@ -3304,7 +4112,7 @@ async function sendAdminDisableBlockConfirmMenu(to: string, block: ReservationBl
 }
 
 async function sendReservationConfirmationOrBlock(to: string, state: UserState): Promise<boolean> {
-  const leadTimeViolation = getReservationLeadTimeViolation(
+  const leadTimeViolation = await getReservationLeadTimeViolation(
     state.reservation?.date_text,
     state.reservation?.time_text,
     state.preferred_unit_name
@@ -3315,6 +4123,28 @@ async function sendReservationConfirmationOrBlock(to: string, state: UserState):
     await sendWhatsAppText(
       to,
       await buildReservationLeadTimeCustomerMessage(
+        state.preferred_store_id,
+        state.preferred_unit_name,
+        state.reservation?.date_text,
+        state.reservation?.time_text,
+        Number(state.reservation?.people || 0) + Number(state.reservation?.kids ?? 0)
+      )
+    );
+    return false;
+  }
+
+  const closingBufferViolation = await getReservationClosingBufferViolation(
+    state.preferred_store_id,
+    state.reservation?.date_text,
+    state.reservation?.time_text,
+    state.preferred_unit_name
+  );
+  if (closingBufferViolation) {
+    if (state.reservation) state.reservation.awaiting_confirmation = false;
+    userStates.set(to, state);
+    await sendWhatsAppText(
+      to,
+      await buildReservationClosingBufferCustomerMessage(
         state.preferred_store_id,
         state.preferred_unit_name,
         state.reservation?.date_text,
@@ -3379,11 +4209,35 @@ function getManualReviewMessage(state: UserState): string {
   return 'Sua solicitação anterior está em verificação pelo nosso time para confirmar a reserva com segurança. 😊';
 }
 
+function shouldAnswerDuringManualReview(normalizedNoAccent: string): boolean {
+  return /\b(confirm|confirma|confirmado|confirmaram|reserva|status|verifica|verificacao|verificação|andamento|retorno|codigo|id|atendimento|humano|falar|unidade|telefone)\b/.test(normalizedNoAccent)
+    || /\?/.test(normalizedNoAccent);
+}
+
+function isGenericManualReviewPing(normalizedNoAccent: string): boolean {
+  return /^(oi|ola|bom dia|boa tarde|boa noite|ok|okay|obrigada|obrigado|valeu|blz|beleza|joia|show|certo|ta bom|tudo bem|hum|hmm|\?+)$/.test(normalizedNoAccent.trim());
+}
+
 export function clearReservationDraftForUser(userId: string): void {
   const state = userStates.get(userId);
   if (!state) return;
   clearReservationDraftState(state);
   userStates.set(userId, state);
+}
+
+export async function markReservationAttemptManualConfirmedForUser(userId: string, reservationCode?: string): Promise<void> {
+  const attempt = await markLatestAttemptManualConfirmed(userId, { reservationCode });
+  if (!attempt) return;
+  await syncReservationVerificationState(userId, {
+    attemptId: attempt.id,
+    status: 'confirmed_manual',
+    storeName: attempt.store_name,
+    dateText: attempt.date_text,
+    timeText: attempt.time_text,
+    reservationId: attempt.reservation_id || undefined,
+    reservationCode: attempt.reservation_code || reservationCode,
+    resolutionSource: 'chatwoot_manual'
+  });
 }
 
 function looksLikeExternalReservationResolution(text: string): boolean {
@@ -3457,6 +4311,7 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
     currentAdminState.step = 'main';
     currentAdminState.draft_block = undefined;
     currentAdminState.draft_reservation = undefined;
+    currentAdminState.pending_lead_time_minutes = undefined;
     currentAdminState.pending_admin_phone = undefined;
     currentAdminState.pending_disable_block_id = undefined;
     currentAdminState.pending_remove_admin_phone = undefined;
@@ -3477,6 +4332,7 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
     currentAdminState.step = 'main';
     currentAdminState.draft_block = undefined;
     currentAdminState.draft_reservation = undefined;
+    currentAdminState.pending_lead_time_minutes = undefined;
     currentAdminState.pending_admin_phone = undefined;
     currentAdminState.pending_disable_block_id = undefined;
     currentAdminState.pending_remove_admin_phone = undefined;
@@ -3491,6 +4347,74 @@ async function handleAdminCommand(text: string, from: string, state: UserState):
     clearAdminReservationState(state);
     userStates.set(from, state);
     await sendAdminReservationsMenu(from);
+    return true;
+  }
+
+  if (normalized === 'admin_menu_lead_time') {
+    currentAdminState.step = 'lead_time_menu';
+    currentAdminState.pending_lead_time_minutes = undefined;
+    userStates.set(from, state);
+    await sendAdminLeadTimeMenu(from);
+    return true;
+  }
+
+  if (normalized === 'admin_lead_status') {
+    const leadMinutes = await getCurrentReservationLeadMinutes();
+    const leadHours = Math.round(leadMinutes / 60);
+    await sendWhatsAppText(
+      from,
+      leadMinutes > 0
+        ? `A antecedência mínima para reservas automáticas está *ativa* em *${formatLeadHoursLabel(leadHours)}*.`
+        : 'A antecedência mínima para reservas automáticas está *desativada*.'
+    );
+    await sendAdminLeadTimeMenu(from);
+    return true;
+  }
+
+  if (normalized === 'admin_lead_enable_default') {
+    const savedMinutes = await updateReservationLeadMinutes(DEFAULT_RESERVATION_LEAD_MINUTES);
+    currentAdminState.step = 'lead_time_menu';
+    currentAdminState.pending_lead_time_minutes = undefined;
+    userStates.set(from, state);
+    await sendWhatsAppText(from, `Perfeito. A antecedência mínima foi ativada em *${formatLeadHoursLabel(Math.round(savedMinutes / 60))}*.`);
+    await sendAdminLeadTimeMenu(from);
+    return true;
+  }
+
+  if (normalized === 'admin_lead_disable') {
+    await updateReservationLeadMinutes(0);
+    currentAdminState.step = 'lead_time_menu';
+    currentAdminState.pending_lead_time_minutes = undefined;
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Perfeito. A antecedência mínima das reservas automáticas foi *desativada*.');
+    await sendAdminLeadTimeMenu(from);
+    return true;
+  }
+
+  if (normalized === 'admin_lead_change') {
+    currentAdminState.step = 'lead_time_wait_hours';
+    currentAdminState.pending_lead_time_minutes = undefined;
+    userStates.set(from, state);
+    await sendWhatsAppText(from, 'Me envie o novo prazo mínimo em *horas inteiras*. Ex.: `4`');
+    return true;
+  }
+
+  if (currentAdminState.step === 'lead_time_wait_hours') {
+    const hours = parseLeadTimeHoursInput(raw);
+    if (hours === null) {
+      await sendWhatsAppText(from, 'Valor inválido. Me envie apenas o número de *horas inteiras* entre `0` e `24`. Ex.: `4`');
+      return true;
+    }
+    const savedMinutes = await updateReservationLeadMinutes(hours * 60);
+    currentAdminState.step = 'lead_time_menu';
+    currentAdminState.pending_lead_time_minutes = undefined;
+    userStates.set(from, state);
+    if (savedMinutes <= 0) {
+      await sendWhatsAppText(from, 'Perfeito. A antecedência mínima foi *desativada*.');
+    } else {
+      await sendWhatsAppText(from, `Perfeito. A antecedência mínima foi atualizada para *${formatLeadHoursLabel(Math.round(savedMinutes / 60))}*.`);
+    }
+    await sendAdminLeadTimeMenu(from);
     return true;
   }
 
@@ -4229,12 +5153,22 @@ async function handleDeterministicCommand(
       /\bate que idade\b/.test(normalizedNoAccent) ||
       /\bpode\b/.test(normalizedNoAccent)
     );
+  const isBotIdentityQuestion =
+    /\b(quem\s+(e|é)\s+voce|quem\s+e\s+vc|quem\s+e\s+tu|quem\s+e\s+vcs?)\b/.test(normalizedNoAccent) ||
+    (
+      /\b(qual|quais|me fala|fala|diz|diga|escreve)\b/.test(normalizedNoAccent) &&
+      /\b(seu|teu)\s+nome\b/.test(normalizedNoAccent)
+    ) ||
+    /\b(seu|teu)\s+nome\s+e\b/.test(normalizedNoAccent);
   const isHappyHourQuestion =
     /\bhappy\s*hour\b/.test(normalizedNoAccent) ||
     (
       /\b(desconto|promoc[aã]o|promocoes|promo[cç][aã]o)\b/.test(normalizedNoAccent) &&
       /\b(16h|20h|segunda|sexta|dias|horario|horarios)\b/.test(normalizedNoAccent)
     );
+  const isHappyHourCardapioIntent =
+    /\bhappy\s*hour\b/.test(normalizedNoAccent) &&
+    /\b(cardapio|cardápio|menu|itens?)\b/.test(normalizedNoAccent);
   const isPetFriendlyQuestion =
     /\bpet\s*friend(?:ly)?\b/.test(normalizedNoAccent) ||
     (
@@ -4247,6 +5181,13 @@ async function handleDeterministicCommand(
   const isDeliveryIntent =
     /\b(delivery|entrega|ifood)\b/.test(normalizedNoAccent) ||
     (/\b(pedir|pedido)\b/.test(normalizedNoAccent) && /\b(entrega|delivery|ifood)\b/.test(normalizedNoAccent));
+  const isDeliveryHelpIntent =
+    text === 'delivery_ajuda' ||
+    (
+      /\b(delivery|entrega|ifood|pedido)\b/.test(normalizedNoAccent) &&
+      /\b(ajuda|reclama|reclamacao|reclamação|problema|errad|falt|atras|atrasou|nao chegou|não chegou|suporte)\b/.test(normalizedNoAccent)
+    ) ||
+    /\b(pedido ja feito|pedido já feito)\b/.test(normalizedNoAccent);
   const isNewOrderIntent =
     /\b(quero|queria|gostaria|preciso|posso|vou)\b.*\b(fazer\s+um\s+pedido|pedir|pedido)\b/.test(normalizedNoAccent) ||
     /\b(fazer\s+um\s+pedido|novo\s+pedido)\b/.test(normalizedNoAccent);
@@ -4266,6 +5207,11 @@ async function handleDeterministicCommand(
     !!contactTargetUnit &&
     /\b(falar|contato|telefone|whatsapp|numero|n[uú]mero|ligar|chamar)\b/.test(normalizedNoAccent) &&
     /\b(unidade|loja|restaurante|cabral|batel|portao|londrina|sao paulo|agua verde|botanico)\b/.test(normalizedNoAccent);
+  const isGenericUnitContactAsk =
+    !contactTargetUnit &&
+    /\b(contato|telefone|whatsapp|numero|n[uú]mero|ligar|chamar)\b/.test(normalizedNoAccent) &&
+    !isDeliveryHelpIntent &&
+    !/\breserv(a|ar|e|ei|ando|acao|ação|as)\b/.test(normalized);
   const isReservationIntent =
     /\breserv(a|ar|e|ei|ando|ação|acao|as)\b/.test(normalized) ||
     normalized.includes('quero reservar') ||
@@ -4273,7 +5219,7 @@ async function handleDeterministicCommand(
     normalized.includes('reservar mesa');
   const isReservationLeadIntent =
     isReservationIntent ||
-    /(\b(consegue|quero|queria|gostaria|preciso|posso)\b.*\b(hoje|amanha|amanhã|dia\s+\d{1,2}|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo)\b)|(\b\d{1,2}\/\d{1,2}\b)/.test(normalizedNoAccent);
+    /(\b(consegue|quero|queria|gostaria|preciso|posso)\b.*\b(hoje|amanha|amanhã|dia\s+\d{1,2}|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo)\b)|(\b\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\b)/.test(normalizedNoAccent);
   const isReservationManageIntent =
     /\b(minha(s)? reserva(s)?|tenho reserva(s)?|consult(a|ar)|verific(a|ar)|checar|cancel(a|ar)|alter(a|ar)|remarc(a|ar)|mudar reserva)\b/.test(normalized);
   const isCancelIntent =
@@ -4301,7 +5247,7 @@ async function handleDeterministicCommand(
     !!parsedReservationInput.date_text ||
     !!parsedReservationInput.time_text ||
     /\bdata\b/.test(normalizedNoAccent) ||
-    /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalizedNoAccent) ||
+    /\b\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\b/.test(normalizedNoAccent) ||
     /\b\d{1,2}(?::|h)\d{2}\s*h?\b/.test(normalizedNoAccent) ||
     /\b\d{1,2}\s*(h|hora|horas)\b/.test(normalizedNoAccent);
   const shouldHandleAsStoreHours =
@@ -4323,7 +5269,200 @@ async function handleDeterministicCommand(
   const isReservationObservationIntent =
     !!parsedReservationInput.notes ||
     isCakeNoteStatement ||
-    /\b(parte de baixo|andar de baixo|parte de cima|andar de cima|docinho|docinhos|janela|parquinho|juntar as mesas)\b/.test(normalizedNoAccent);
+    /\b(parte de baixo|andar de baixo|parte de cima|andar de cima|docinho|docinhos|janela|parquinho|juntar as mesas|espaco kids|area kids)\b/.test(normalizedNoAccent) ||
+    /\b(vista|frente|perto|proximo|proxima)\b.*\b(espaco kids|area kids|kids)\b/.test(normalizedNoAccent);
+
+  if (state.help?.type === 'lost_found') {
+    if (state.help.awaiting_unit) {
+      const helpUnitKey = text.startsWith('help_unit_') ? HELP_UNIT_CONFIG[text] : undefined;
+      const helpUnit = mentionedUnit || (helpUnitKey ? UNIT_CONFIG[helpUnitKey] : null);
+      if (helpUnit?.name && helpUnit?.storeId) {
+        state.help.unit_name = helpUnit.name;
+        state.help.store_id = helpUnit.storeId;
+        state.help.awaiting_unit = false;
+        state.help.awaiting_item = true;
+        state.preferred_unit_name = helpUnit.name;
+        state.preferred_store_id = helpUnit.storeId;
+        userStates.set(from, state);
+        await sendWhatsAppText(
+          from,
+          `Perfeito. Me diga, por favor, *o que foi esquecido* na unidade *${helpUnit.name}* para eu notificar a equipe.`
+        );
+        return true;
+      }
+
+      if (!isGreeting && !isThanks && !isOfferRejection) {
+        await sendWhatsAppText(from, 'Me confirma a unidade para eu avisar a equipe certa.');
+        await sendHelpUnitsMenu(from);
+        return true;
+      }
+    }
+
+    if (state.help.awaiting_item) {
+      const itemDescription = String(text || '').replace(/\s+/g, ' ').trim();
+      const isTechnicalInteractiveToken =
+        /^help_/.test(text) ||
+        /^menu_/.test(text) ||
+        /^unidade_/.test(text) ||
+        /^cardapio_/.test(text) ||
+        /^delivery_/.test(text) ||
+        /^admin_/.test(text);
+      if (!itemDescription || MENU_COMMANDS.has(text) || isGreeting || isTechnicalInteractiveToken) {
+        await sendWhatsAppText(from, 'Me diga o que foi esquecido para eu encaminhar à unidade.');
+        return true;
+      }
+
+      const unitName = state.help.unit_name || state.preferred_unit_name || '';
+      await assignChatwootConversationToUnitManager(from, unitName, 'lost_found');
+      await addPrivateChatwootNote(
+        from,
+        [
+          'ACHADOS E PERDIDOS',
+          `Unidade: ${unitName || 'não identificada'}`,
+          `Telefone cliente: +${toDigitsPhone(from)}`,
+          `Relato: ${itemDescription}`
+        ].join('\n')
+      );
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Perfeito, avisei a unidade *${unitName}* sobre o item informado. 😊\n\nA equipe foi notificada e deve entrar em contato com você para verificar isso com mais cuidado.`
+      );
+      return true;
+    }
+  }
+
+  if (state.help?.type === 'public_admin_menu') {
+    const wantsRh = /\brh\b/.test(normalizedNoAccent);
+    const wantsCompras = /\bcompras?\b/.test(normalizedNoAccent);
+    const wantsFinanceiro = /\bfinanceiro\b/.test(normalizedNoAccent);
+    const wantsFeedback =
+      /\b(sugestoes?|sugestões?|criticas?|críticas?|feedback)\b/.test(normalizedNoAccent);
+
+    if (wantsRh) {
+      state.help = { type: 'public_admin_rh_menu' };
+      userStates.set(from, state);
+      await sendPublicRhMenu(from);
+      return true;
+    }
+
+    if (wantsCompras) {
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      userStates.set(from, state);
+      await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.compras, 'compras', 'public_admin_compras');
+      await addPrivateChatwootNote(
+        from,
+        [
+          'ADMINISTRACAO',
+          'Canal: Compras',
+          `Telefone cliente: +${toDigitsPhone(from)}`,
+          'Origem: menu público'
+        ].join('\n')
+      );
+      await sendWhatsAppText(
+        from,
+        'Perfeito. Vou te conectar com *Compras*. 😊\n\nDescreva por favor a sua solicitação, produto ou necessidade, que a equipe seguirá por aqui.'
+      );
+      return true;
+    }
+
+    if (wantsFinanceiro) {
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      userStates.set(from, state);
+      await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.financeiro, 'financeiro', 'public_admin_financeiro');
+      await addPrivateChatwootNote(
+        from,
+        [
+          'ADMINISTRACAO',
+          'Canal: Financeiro',
+          `Telefone cliente: +${toDigitsPhone(from)}`,
+          'Origem: menu público'
+        ].join('\n')
+      );
+      await sendWhatsAppText(
+        from,
+        'Perfeito. Vou te conectar com o *Financeiro*. 😊\n\nEnvie por favor a sua solicitação por aqui, com o máximo de contexto possível, que a equipe dará continuidade.'
+      );
+      return true;
+    }
+
+    if (wantsFeedback) {
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      userStates.set(from, state);
+      await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.central, 'central', 'public_admin_feedback');
+      await addPrivateChatwootNote(
+        from,
+        [
+          'ADMINISTRACAO',
+          'Canal: Sugestões/Críticas',
+          `Telefone cliente: +${toDigitsPhone(from)}`,
+          'Destino: central',
+          'Origem: menu público'
+        ].join('\n')
+      );
+      await sendWhatsAppText(
+        from,
+        'Perfeito. Vou encaminhar sua mensagem para a *Administração*. 😊\n\nEscreva por favor sua sugestão ou crítica por aqui, que a equipe responsável seguirá o atendimento.'
+      );
+      return true;
+    }
+  }
+
+  if (state.help?.type === 'public_admin_rh_menu') {
+    const isEmployee =
+      /\b(ja sou funcionario|já sou funcionario|ja sou colaborador|já sou colaborador|sou funcionario|sou colaborador)\b/.test(normalizedNoAccent);
+    const isCandidate =
+      /\b(nao sou funcionario|não sou funcionario|nao sou colaborador|não sou colaborador|curriculo|curriculo|vaga|trabalhar|quero trabalhar)\b/.test(normalizedNoAccent);
+
+    if (isEmployee) {
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      userStates.set(from, state);
+      await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.rh, 'rh', 'public_admin_rh_employee');
+      await addPrivateChatwootNote(
+        from,
+        [
+          'ADMINISTRACAO',
+          'Canal: RH',
+          'Perfil: funcionário',
+          `Telefone cliente: +${toDigitsPhone(from)}`,
+          'Origem: menu público'
+        ].join('\n')
+      );
+      await sendWhatsAppText(
+        from,
+        'Perfeito. Vou te conectar com o *RH*. 😊\n\nEnvie por favor seu nome, unidade/cargo e o que você precisa, que a equipe seguirá o atendimento por aqui.'
+      );
+      return true;
+    }
+
+    if (isCandidate) {
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      userStates.set(from, state);
+      await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.rh, 'rh', 'public_admin_rh_candidate');
+      await addPrivateChatwootNote(
+        from,
+        [
+          'ADMINISTRACAO',
+          'Canal: RH',
+          'Perfil: candidato externo',
+          `Telefone cliente: +${toDigitsPhone(from)}`,
+          'Origem: menu público'
+        ].join('\n')
+      );
+      await sendWhatsAppText(
+        from,
+        'Perfeito. Vou te conectar com o *RH*. 😊\n\nEnvie por favor *nome completo, telefone, cidade/unidade de interesse, área/vaga desejada* e, se quiser, já pode mandar o *currículo* por aqui para a equipe analisar.'
+      );
+      return true;
+    }
+  }
 
   // If waiting final confirmation, keep user inside confirmation state.
   if (state.reservation?.awaiting_confirmation && text !== 'confirm_reserva_sim' && text !== 'confirm_reserva_nao') {
@@ -4337,6 +5476,7 @@ async function handleDeterministicCommand(
   // Main menu
   if (text === 'MENU_PRINCIPAL' || normalized === 'menu' || normalized === 'inicio' || normalized === 'voltar') {
     clearReservationDraftState(state);
+    clearHelpState(state);
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, false);
@@ -4344,6 +5484,7 @@ async function handleDeterministicCommand(
   }
 
   if (isInActiveFlow(state) && (isExternalReservationResolved || (isThanks && /confirm/.test(normalizedNoAccent)))) {
+    await markLatestAttemptManualConfirmed(from);
     clearReservationDraftState(state);
     userStates.set(from, state);
     await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
@@ -4352,13 +5493,27 @@ async function handleDeterministicCommand(
 
   if (state.reservation?.awaiting_manual_review) {
     if (isExternalReservationResolved) {
+      await markLatestAttemptManualConfirmed(from);
       clearReservationDraftState(state);
       userStates.set(from, state);
       await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
       return true;
     }
 
-    if (isGreeting || isGenericAck || isThanks || isReviewStatusRequest || isFrustrationMessage) {
+    if (text !== 'MENU_PRINCIPAL' && normalized !== 'menu' && normalized !== 'inicio' && normalized !== 'voltar') {
+      const now = Date.now();
+      const lastNoticeAt = Number(state.reservation.manual_review_last_notice_at || 0);
+      const isGenericPing = isGenericManualReviewPing(normalizedNoAccent);
+      const needsReply = shouldAnswerDuringManualReview(normalizedNoAccent) || !lastNoticeAt;
+      const cooldownMs = isGenericPing ? 30 * 60 * 1000 : 2 * 60 * 1000;
+
+      if (!needsReply || (lastNoticeAt && now - lastNoticeAt < cooldownMs)) {
+        return true;
+      }
+
+      state.reservation.manual_review_last_notice_at = now;
+      userStates.set(from, state);
+      await assignChatwootConversationToUnitManager(from, state.preferred_unit_name, 'reservation_manual_review');
       await sendWhatsAppText(from, getManualReviewMessage(state));
       return true;
     }
@@ -4380,6 +5535,34 @@ async function handleDeterministicCommand(
     await sendWhatsAppText(
       from,
       `Sim! 🍷 Trabalhamos com rolha liberada${unit}, sem custo. Pode trazer vinho ou bebida de casa sem taxa. 😊`
+    );
+    return true;
+  }
+
+  if (state.pending_offer === 'delivery_help_offer') {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const city = state.preferred_city || inferCityFromUnitName(unitName) || inferCityFromText(text);
+    const phone = getDeliveryHelpPhone(unitName, city);
+
+    if (phone || city === 'Curitiba') {
+      state.pending_offer = undefined;
+      if (unitName) state.preferred_unit_name = unitName;
+      if (city) state.preferred_city = city;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, buildDeliveryHelpMessage(unitName, city));
+      return true;
+    }
+
+    if (isThanks || isOfferRejection) {
+      state.pending_offer = undefined;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, 'Sem problemas 😊');
+      return true;
+    }
+
+    await sendWhatsAppText(
+      from,
+      'Me diga a cidade ou unidade do pedido para eu te passar o contato certo de ajuda do delivery.'
     );
     return true;
   }
@@ -4461,6 +5644,7 @@ async function handleDeterministicCommand(
         from,
         `Claro! O contato da unidade *${unitName}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com reserva, cardápio ou delivery.`
       );
+      await assignChatwootConversationToUnitManager(from, unitName, 'unit_contact_offer');
       return true;
     }
 
@@ -4521,7 +5705,59 @@ async function handleDeterministicCommand(
     return true;
   }
 
-  if (isGourmetQuestion || isLostAndFoundQuestion || isHumanAssistanceRequest) {
+  if (isDeliveryHelpIntent) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const city = state.preferred_city || inferCityFromUnitName(unitName) || inferCityFromText(text);
+    if (getDeliveryHelpPhone(unitName, city) || city === 'Curitiba') {
+      state.pending_offer = undefined;
+      if (unitName) state.preferred_unit_name = unitName;
+      if (city) state.preferred_city = city;
+      userStates.set(from, state);
+      await sendWhatsAppText(from, buildDeliveryHelpMessage(unitName, city));
+      return true;
+    }
+
+    state.pending_offer = 'delivery_help_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Claro! Me diga a cidade ou unidade do pedido para eu te passar o contato certo de ajuda do delivery.'
+    );
+    return true;
+  }
+
+  if (isLostAndFoundQuestion) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const storeId = mentionedUnit?.storeId || state.preferred_store_id || '';
+    clearReservationDraftState(state);
+    state.help = {
+      type: 'lost_found',
+      awaiting_unit: !unitName,
+      awaiting_item: !!unitName,
+      unit_name: unitName || undefined,
+      store_id: storeId || undefined
+    };
+    if (unitName) {
+      state.preferred_unit_name = unitName;
+      state.preferred_store_id = storeId || state.preferred_store_id;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Claro. Me diga, por favor, *o que foi esquecido* na unidade *${unitName}* para eu avisar a equipe.`
+      );
+      return true;
+    }
+
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Claro. Vou te ajudar com *Achados e Perdidos*. 😊\n\nMe diga em qual unidade aconteceu para eu avisar a equipe certa.'
+    );
+    await sendHelpUnitsMenu(from);
+    return true;
+  }
+
+  if (isGourmetQuestion || isHumanAssistanceRequest) {
     const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
     const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
     if (unitName && unitPhone) {
@@ -4534,6 +5770,7 @@ async function handleDeterministicCommand(
         from,
         `Claro! O contato da unidade *${unitName}* é *${unitPhone}*.\n\nComo esse tipo de assunto precisa da equipe da loja, o melhor é falar direto com eles por lá.`
       );
+      await assignChatwootConversationToUnitManager(from, unitName, 'unit_problem');
       return true;
     }
 
@@ -4557,6 +5794,7 @@ async function handleDeterministicCommand(
         from,
         `Entendi. Vou encerrar o fluxo automático por aqui. 😊\n\nPara seguir direto com a equipe da unidade *${unitName}*, o telefone é *${unitPhone}*.`
       );
+      await assignChatwootConversationToUnitManager(from, unitName, 'human_handoff');
     } else {
       await sendWhatsAppText(
         from,
@@ -4567,9 +5805,38 @@ async function handleDeterministicCommand(
   }
 
   if (isHappyHourQuestion) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const city = state.preferred_city || inferCityFromUnitName(unitName) || inferCityFromText(text);
+    if (isHappyHourCardapioIntent) {
+      const msg = await buildHappyHourCardapioMessage(unitName, city);
+      if (unitName) state.preferred_unit_name = unitName;
+      if (city) state.preferred_city = city;
+      state.pending_offer = unitName ? undefined : 'unit_contact_offer';
+      userStates.set(from, state);
+      if (msg) {
+        await sendWhatsAppText(from, msg);
+      } else {
+        await sendWhatsAppText(
+          from,
+          'Me diga a *cidade ou unidade* do Happy Hour que eu te passo o cardápio e, se precisar, o contato certo para confirmar os itens.'
+        );
+      }
+      return true;
+    }
+
     state.pending_offer = undefined;
     userStates.set(from, state);
     await sendWhatsAppText(from, HAPPY_HOUR_INFO_TEXT);
+    return true;
+  }
+
+  if (isBotIdentityQuestion) {
+    state.pending_offer = undefined;
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Eu sou a *Kha*, assistente virtual do *Kharina*. 😊\n\nMeu nome é *Kha* e estou aqui para te ajudar com reservas, cardápio, delivery, Espaço Kids e ajuda das unidades.'
+    );
     return true;
   }
 
@@ -4577,6 +5844,16 @@ async function handleDeterministicCommand(
     state.pending_offer = 'pet_friendly_reservation_offer';
     userStates.set(from, state);
     await sendWhatsAppText(from, PET_FRIENDLY_INFO_TEXT);
+    return true;
+  }
+
+  if (isGenericUnitContactAsk) {
+    state.pending_offer = 'unit_contact_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Claro. Me diga qual unidade você quer consultar que eu te passo o contato certo: Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo.'
+    );
     return true;
   }
 
@@ -4592,6 +5869,7 @@ async function handleDeterministicCommand(
         from,
         `Claro! O contato da unidade *${contactTargetUnit}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com a reserva por aqui. 😊`
       );
+      await assignChatwootConversationToUnitManager(from, contactTargetUnit, 'unit_contact');
       return true;
     }
   }
@@ -4726,6 +6004,10 @@ async function handleDeterministicCommand(
 
   // Greeting outside active flow -> open main menu immediately
   if (isGreeting && !isInActiveFlow(state)) {
+    if (recentlyPromptedReservationUnit(from)) {
+      await sendUnidadesMenu(from);
+      return true;
+    }
     state.has_interacted = true;
     userStates.set(from, state);
     await sendMainMenu(from, false);
@@ -4741,6 +6023,22 @@ async function handleDeterministicCommand(
   }
 
   if (!isInActiveFlow(state) && recentlyPromptedDeliveryCities(from)) {
+    if (isCardapioIntent) {
+      state.preferred_city = undefined;
+      state.has_interacted = true;
+      userStates.set(from, state);
+      await sendCitiesMenu(from);
+      return true;
+    }
+
+    if (isReservationIntent) {
+      state.preferred_city = undefined;
+      state.has_interacted = true;
+      userStates.set(from, state);
+      await sendUnidadesMenu(from);
+      return true;
+    }
+
     const city = inferCityFromText(text);
     if (city) {
       state.preferred_city = city;
@@ -4761,9 +6059,48 @@ async function handleDeterministicCommand(
     return true;
   }
 
+  if (state.reservation?.awaiting_cancellation && MENU_COMMANDS.has(text)) {
+    const pendingAllIds = (state.reservation.pending_cancellation_all_ids || []).filter(Boolean);
+    if (pendingAllIds.length > 0) {
+      await sendCancelAllConfirmationMenu(from, pendingAllIds.length);
+      return true;
+    }
+
+    const pendingId = String(state.reservation?.pending_cancellation_id || '').trim();
+    if (pendingId) {
+      const code = state.reservation?.pending_cancellation_code || pendingId.substring(0, 8).toUpperCase();
+      await sendCancelConfirmationMenu(
+        from,
+        pendingId,
+        `Confirma o cancelamento da reserva ${code} (${state.reservation?.date_text ? toBrDate(normalizeIsoDate(state.reservation.date_text)) : 'data pendente'} às ${state.reservation?.time_text || 'horário pendente'}, ${state.preferred_unit_name || 'unidade pendente'})?`
+      );
+      return true;
+    }
+  }
+
   if (isInActiveFlow(state) && isAlternativeTimeRequest) {
     const block = await maybeGetReservationBlock(state);
     if (block) {
+      const wantsAnotherUnit = /\boutra?\s+unidade\b/.test(normalizedNoAccent);
+      const wantsAnotherTime = /\boutro\b.*\b(horario|horário|hora|horas)\b/.test(normalizedNoAccent) || /\b(horario|horário|hora|horas)\b/.test(normalizedNoAccent);
+
+      if (wantsAnotherUnit) {
+        if (state.reservation) state.reservation.awaiting_confirmation = false;
+        state.preferred_store_id = undefined;
+        state.preferred_unit_name = undefined;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Perfeito! Me diz a outra unidade que você quer tentar, ou escolha na lista abaixo. 😊');
+        await sendUnidadesMenu(from);
+        return true;
+      }
+
+      if (wantsAnotherTime && !parsedReservationInput.time_text) {
+        if (state.reservation) state.reservation.awaiting_confirmation = false;
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Claro! Me diga o horário que você quer tentar nessa unidade, ou escolha um dos horários sugeridos. 😊');
+        return true;
+      }
+
       if (state.reservation) state.reservation.awaiting_confirmation = false;
       userStates.set(from, state);
       await sendWhatsAppText(
@@ -5002,6 +6339,7 @@ async function handleDeterministicCommand(
 
   // Cardapio menu
   if (text === 'menu_cardapio') {
+    clearHelpState(state);
     state.has_interacted = true;
     userStates.set(from, state);
     await sendCitiesMenu(from);
@@ -5028,6 +6366,7 @@ async function handleDeterministicCommand(
 
   // Reserva menu
   if (text === 'menu_reserva') {
+    clearHelpState(state);
     state.reservation = state.reservation ? { contact_phone: state.reservation.contact_phone } : undefined;
     state.has_interacted = true;
     userStates.set(from, state);
@@ -5037,6 +6376,7 @@ async function handleDeterministicCommand(
 
   // Delivery menu
   if (text === 'menu_delivery') {
+    clearHelpState(state);
     state.has_interacted = true;
     userStates.set(from, state);
     await sendDeliveryCitiesMenu(from);
@@ -5045,6 +6385,7 @@ async function handleDeterministicCommand(
 
   // Espaço Kids menu
   if (text === 'menu_kids') {
+    clearHelpState(state);
     state.has_interacted = true;
     userStates.set(from, state);
     const kidsSticker = await db.getConfig('kids_sticker_media');
@@ -5056,6 +6397,173 @@ async function handleDeterministicCommand(
     const kidsMsg = await buildKidsInfoMessage();
     await sendWhatsAppText(from, kidsMsg);
     await sendMainMenu(from, true);
+    return true;
+  }
+
+  if (text === 'menu_help') {
+    clearReservationDraftState(state);
+    state.help = {
+      type: 'lost_found',
+      awaiting_unit: true,
+      awaiting_item: false
+    };
+    userStates.set(from, state);
+    await sendHelpUnitsMenu(from);
+    return true;
+  }
+
+  if (text === 'menu_public_admin') {
+    clearReservationDraftState(state);
+    state.has_interacted = true;
+    state.help = { type: 'public_admin_menu' };
+    userStates.set(from, state);
+    await sendPublicAdminMenu(from);
+    return true;
+  }
+
+  if (text === 'help_lost_found') {
+    clearReservationDraftState(state);
+    state.help = {
+      type: 'lost_found',
+      awaiting_unit: true,
+      awaiting_item: false
+    };
+    userStates.set(from, state);
+    await sendHelpUnitsMenu(from);
+    return true;
+  }
+
+  if (text === 'public_admin_rh') {
+    clearReservationDraftState(state);
+    state.has_interacted = true;
+    state.help = { type: 'public_admin_rh_menu' };
+    userStates.set(from, state);
+    await sendPublicRhMenu(from);
+    return true;
+  }
+
+  if (text === 'public_admin_compras') {
+    clearReservationDraftState(state);
+    clearHelpState(state);
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.compras, 'compras', 'public_admin_compras');
+    await addPrivateChatwootNote(
+      from,
+      [
+        'ADMINISTRACAO',
+        'Canal: Compras',
+        `Telefone cliente: +${toDigitsPhone(from)}`,
+        'Origem: menu público'
+      ].join('\n')
+    );
+    await sendWhatsAppText(
+      from,
+      'Perfeito. Vou te conectar com *Compras*. 😊\n\nDescreva por favor a sua solicitação, produto ou necessidade, que a equipe seguirá por aqui.'
+    );
+    return true;
+  }
+
+  if (text === 'public_admin_financeiro') {
+    clearReservationDraftState(state);
+    clearHelpState(state);
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.financeiro, 'financeiro', 'public_admin_financeiro');
+    await addPrivateChatwootNote(
+      from,
+      [
+        'ADMINISTRACAO',
+        'Canal: Financeiro',
+        `Telefone cliente: +${toDigitsPhone(from)}`,
+        'Origem: menu público'
+      ].join('\n')
+    );
+    await sendWhatsAppText(
+      from,
+      'Perfeito. Vou te conectar com o *Financeiro*. 😊\n\nEnvie por favor a sua solicitação por aqui, com o máximo de contexto possível, que a equipe dará continuidade.'
+    );
+    return true;
+  }
+
+  if (text === 'public_admin_feedback') {
+    clearReservationDraftState(state);
+    clearHelpState(state);
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.central, 'central', 'public_admin_feedback');
+    await addPrivateChatwootNote(
+      from,
+      [
+        'ADMINISTRACAO',
+        'Canal: Sugestões/Críticas',
+        `Telefone cliente: +${toDigitsPhone(from)}`,
+        'Destino: central',
+        'Origem: menu público'
+      ].join('\n')
+    );
+    await sendWhatsAppText(
+      from,
+      'Perfeito. Vou encaminhar sua mensagem para a *Administração*. 😊\n\nEscreva por favor sua sugestão ou crítica por aqui, que a equipe responsável seguirá o atendimento.'
+    );
+    return true;
+  }
+
+  if (text === 'public_admin_rh_employee') {
+    clearReservationDraftState(state);
+    clearHelpState(state);
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.rh, 'rh', 'public_admin_rh_employee');
+    await addPrivateChatwootNote(
+      from,
+      [
+        'ADMINISTRACAO',
+        'Canal: RH',
+        'Perfil: funcionário',
+        `Telefone cliente: +${toDigitsPhone(from)}`,
+        'Origem: menu público'
+      ].join('\n')
+    );
+    await sendWhatsAppText(
+      from,
+      'Perfeito. Vou te conectar com o *RH*. 😊\n\nEnvie por favor seu nome, unidade/cargo e o que você precisa, que a equipe seguirá o atendimento por aqui.'
+    );
+    return true;
+  }
+
+  if (text === 'public_admin_rh_candidate') {
+    clearReservationDraftState(state);
+    clearHelpState(state);
+    state.has_interacted = true;
+    userStates.set(from, state);
+    await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.rh, 'rh', 'public_admin_rh_candidate');
+    await addPrivateChatwootNote(
+      from,
+      [
+        'ADMINISTRACAO',
+        'Canal: RH',
+        'Perfil: candidato externo',
+        `Telefone cliente: +${toDigitsPhone(from)}`,
+        'Origem: menu público'
+      ].join('\n')
+    );
+    await sendWhatsAppText(
+      from,
+      'Perfeito. Vou te conectar com o *RH*. 😊\n\nEnvie por favor *nome completo, telefone, cidade/unidade de interesse, área/vaga desejada* e, se quiser, já pode mandar o *currículo* por aqui para a equipe analisar.'
+    );
+    return true;
+  }
+
+  if (text === 'help_unit_contact') {
+    clearReservationDraftState(state);
+    state.pending_offer = 'unit_contact_offer';
+    state.help = {};
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Claro. Me diga qual unidade você quer consultar que eu te passo o telefone fixo certo: Jardim Botânico, Cabral, Água Verde, Batel, Portão, Londrina ou São Paulo.'
+    );
     return true;
   }
 
@@ -5104,6 +6612,17 @@ async function handleDeterministicCommand(
   }
 
   // delivery_ajuda is now handled by AI to allow better interpretation/empathy
+  if (text === 'delivery_ajuda') {
+    state.pending_offer = 'delivery_help_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      state.preferred_city
+        ? buildDeliveryHelpMessage(state.preferred_unit_name, state.preferred_city)
+        : 'Claro! Me diga a cidade ou unidade do pedido para eu te passar o contato certo de ajuda do delivery.'
+    );
+    return true;
+  }
 
   // Unidade selection
   if (UNIT_CONFIG[text]) {
@@ -5209,7 +6728,7 @@ async function handleDeterministicCommand(
   }
 
   // Reservation flow guard: user sent only date/time (without people count)
-  if (timeOnlyPattern && isInActiveFlow(state)) {
+  if (timeOnlyPattern && isInActiveFlow(state) && !state.reservation?.people) {
     const extracted = parseReservationDetails(text);
     state.reservation = { ...(state.reservation || {}), ...extracted };
     userStates.set(from, state);
@@ -5343,6 +6862,10 @@ async function handleDeterministicCommand(
       const onlyPeople = extractStandalonePeople(text);
       if (onlyPeople) extracted.people = onlyPeople;
     }
+    if (!extracted.time_text && !state.reservation?.time_text) {
+      const onlyTime = extractStandaloneTime(text);
+      if (onlyTime) extracted.time_text = onlyTime;
+    }
     if (extractedName) {
       extracted.name = extractedName;
       extracted.awaiting_name = false;
@@ -5383,6 +6906,14 @@ async function handleDeterministicCommand(
       await sendWhatsAppText(from, 'Estamos quase lá ✅ Se estiver tudo certo no resumo, toque em *Sim, tudo certo!* para eu tentar concluir agora.');
       await sendReservationConfirmationOrBlock(from, state);
       return true;
+    }
+
+    if (isReviewStatusRequest || /^[?!.]+$/.test(normalized)) {
+      const missing = getMissingReservationFields(state.reservation);
+      if (missing.length > 0) {
+        await sendWhatsAppText(from, `Ainda não confirmei a reserva 😊 Só falta me confirmar ${missing.join(' e ')}.`);
+        return true;
+      }
     }
 
     // Stay deterministic while in active flow; avoid falling back to LLM on ambiguous turns.
@@ -5715,9 +7246,15 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
         default:
           if (result.response) {
-            const safeResponse = sanitizeAgentFallbackPhone(
-              sanitizeWhatsAppText(result.response),
-              from,
+            const safeResponse = sanitizeIncompleteReservationFallback(
+              sanitizeReservationTimingResponse(
+                sanitizeAgentFallbackPhone(
+                  sanitizeWhatsAppText(result.response),
+                  from,
+                  state
+                ),
+                state
+              ),
               state
             );
             const sendStart = Date.now();
@@ -5731,9 +7268,15 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
     } else {
       // Regular text response
       if (result.response) {
-        const safeResponse = sanitizeAgentFallbackPhone(
-          sanitizeWhatsAppText(result.response),
-          from,
+        const safeResponse = sanitizeIncompleteReservationFallback(
+          sanitizeReservationTimingResponse(
+            sanitizeAgentFallbackPhone(
+              sanitizeWhatsAppText(result.response),
+              from,
+              state
+            ),
+            state
+          ),
           state
         );
         const sendStart = Date.now();

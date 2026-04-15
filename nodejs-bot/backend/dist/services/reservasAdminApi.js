@@ -91,5 +91,8 @@ class ReservasAdminApiService {
             ...(input || {})
         });
     }
+    async getReservationById(reservationId) {
+        return this.request('GET', `/admin/reservations/${reservationId}`);
+    }
 }
 exports.reservasAdminApiService = new ReservasAdminApiService();

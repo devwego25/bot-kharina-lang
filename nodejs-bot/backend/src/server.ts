@@ -9,6 +9,7 @@ import whatsappRoutes from './routes/whatsapp.routes';
 import chatwootWebhookRoutes from './routes/chatwoot.webhook.routes';
 import { ensureConfiguredMasterAdmins } from './services/reservationAdmin';
 import { seedConfigs } from './services/seed';
+import { reconcilePendingReservationAttempts } from './services/reservationReconciliation';
 
 const app = express();
 
@@ -44,9 +45,18 @@ function renderLegalPage(title: string, contentHtml: string) {
 db.init()
   .then(() => seedConfigs())
   .then(() => ensureConfiguredMasterAdmins())
+  .then(() => reconcilePendingReservationAttempts().catch((err) => {
+    console.error('[ReservationReconciliation] startup run failed:', err?.message || err);
+  }))
   .catch((err) => {
     console.error('[Init] startup init failed:', err?.message || err);
   });
+
+setInterval(() => {
+  reconcilePendingReservationAttempts().catch((err) => {
+    console.error('[ReservationReconciliation] interval run failed:', err?.message || err);
+  });
+}, 2 * 60 * 1000);
 
 // ─── Express Setup ──────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));

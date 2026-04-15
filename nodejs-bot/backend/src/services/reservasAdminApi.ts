@@ -38,6 +38,12 @@ export type ReservationListItem = {
   } | null;
 };
 
+export type ReservationDetailsResponse = ReservationListItem & {
+  customerEmail?: string | null;
+  duration?: number | null;
+  metadata?: any;
+};
+
 export type ReservationListResponse = {
   data: ReservationListItem[];
   meta: {
@@ -150,6 +156,10 @@ class ReservasAdminApiService {
       search,
       ...(input || {})
     });
+  }
+
+  async getReservationById(reservationId: string): Promise<ReservationDetailsResponse> {
+    return this.request<ReservationDetailsResponse>('GET', `/admin/reservations/${reservationId}`);
   }
 }
 

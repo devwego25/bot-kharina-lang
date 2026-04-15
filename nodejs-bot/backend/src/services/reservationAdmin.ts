@@ -3,6 +3,8 @@ import { db } from './db';
 
 export type AdminRole = 'master' | 'admin';
 export type ReservationBlockMode = 'deny' | 'suggest_alternative' | 'handoff';
+export const RESERVATION_LEAD_MINUTES_CONFIG_KEY = 'reservation_lead_minutes';
+export const DEFAULT_RESERVATION_LEAD_MINUTES = 240;
 
 export interface AdminUser {
   phone: string;
@@ -76,6 +78,15 @@ function normalizeTimeInput(raw: string): string | null {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+function normalizeLeadMinutesInput(raw: unknown): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_RESERVATION_LEAD_MINUTES;
+  const rounded = Math.round(parsed);
+  if (rounded < 0) return 0;
+  if (rounded > 24 * 60) return 24 * 60;
+  return rounded;
+}
+
 function isoDateToWeekday(date: string): number | null {
   const match = String(date || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -99,6 +110,18 @@ async function getConfiguredMasterPhones(): Promise<string[]> {
 
 export async function listConfiguredMasterPhones(): Promise<string[]> {
   return getConfiguredMasterPhones();
+}
+
+export async function getReservationLeadMinutes(): Promise<number> {
+  const configured = await db.getConfig(RESERVATION_LEAD_MINUTES_CONFIG_KEY);
+  if (configured === null) return DEFAULT_RESERVATION_LEAD_MINUTES;
+  return normalizeLeadMinutesInput(configured);
+}
+
+export async function setReservationLeadMinutes(minutes: number): Promise<number> {
+  const normalized = normalizeLeadMinutesInput(minutes);
+  await db.upsertConfig(RESERVATION_LEAD_MINUTES_CONFIG_KEY, String(normalized));
+  return normalized;
 }
 
 export async function isConfiguredMasterPhone(phone: string): Promise<boolean> {
