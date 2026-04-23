@@ -14,13 +14,13 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    
     "@types/express": "^5.0.6",
     "@types/node": "^25.2.3",
     "axios": "^1.13.5",
     "dotenv": "^17.2.4",
     "eventsource": "^4.1.0",
     "express": "^5.2.1",
+    "form-data": "^4.0.5",
     "https-proxy-agent": "^7.0.6",
     "ioredis": "^5.9.2",
     "nodemon": "^3.1.11",
@@ -34,6 +34,7 @@
   "devDependencies": {
     "@types/axios": "^0.9.36",
     "@types/eventsource": "^1.1.15",
+    "@types/form-data": "^2.2.1",
     "@types/ioredis": "^4.28.10",
     "@types/pg": "^8.16.0"
   }

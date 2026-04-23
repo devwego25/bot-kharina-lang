@@ -1,4 +1,5 @@
 import axios from 'axios';
+import FormData from 'form-data';
 import { config } from '../config/env';
 
 export class ChatwootService {
@@ -46,17 +47,53 @@ export class ChatwootService {
     }
 
     /**
+     * Sincroniza uma mensagem com anexo (mídia) com o Chatwoot.
+     */
+    async syncMediaMessage(phone: string, name: string, mediaBuffer: Buffer, fileName: string, mimeType: string, type: 'incoming' | 'outgoing', attributes: any = {}) {
+        if (!this.baseUrl || !this.headers.api_access_token) {
+            console.warn('[Chatwoot] Service not configured. Skipping media sync.');
+            return null;
+        }
+
+        try {
+            const contactId = await this.getOrCreateContact(phone, name);
+            if (!contactId) return null;
+
+            const conversationId = await this.getOrCreateConversation(contactId, phone);
+            if (!conversationId) return null;
+
+            const form = new FormData();
+            form.append('content', attributes.source === 'whatsapp' ? '[Anexo do WhatsApp]' : '');
+            form.append('message_type', type);
+            form.append('private', 'false');
+            form.append('attachments[]', mediaBuffer, { filename: fileName, contentType: mimeType });
+            
+            const url = `${this.baseUrl}/api/v1/accounts/${this.accountId}/conversations/${conversationId}/messages`;
+            const response = await axios.post(url, form, {
+                headers: {
+                    ...form.getHeaders(),
+                    'api_access_token': this.headers.api_access_token
+                }
+            });
+            return response.data;
+        } catch (err: any) {
+            console.error('[Chatwoot] Sync Media Error:', err.response?.data || err.message);
+            return null;
+        }
+    }
+
+    /**
      * Verifica se o bot deve responder ou se um humano assumiu.
      * Retorna true se o bot estiver ATIVO (nenhum humano assumiu).
      * Retorna false se um humano assumiu ou se houver erro (na dúvida, pausa o bot).
      */
-    async checkBotActive(phone: string): Promise<boolean> {
+    async checkBotActive(phone: string, signal?: AbortSignal): Promise<boolean> {
         if (!this.baseUrl || !this.headers.api_access_token) return true;
 
         try {
             // 1. Buscar contato
             const searchUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/search?q=${phone}`;
-            const searchResp = await this.client.get(searchUrl, { headers: this.headers });
+            const searchResp = await this.client.get(searchUrl, { headers: this.headers, signal });
             const searchData = searchResp.data as any;
             const contact = searchData.payload?.[0];
 
@@ -64,7 +101,7 @@ export class ChatwootService {
 
             // 2. Buscar conversas
             const convsUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/${contact.id}/conversations`;
-            const convsResp = await this.client.get(convsUrl, { headers: this.headers });
+            const convsResp = await this.client.get(convsUrl, { headers: this.headers, signal });
             const convsData = convsResp.data as any;
             const conversations = convsData.payload;
 
