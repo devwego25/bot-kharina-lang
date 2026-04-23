@@ -14,6 +14,7 @@ const whatsapp_routes_1 = __importDefault(require("./routes/whatsapp.routes"));
 const chatwoot_webhook_routes_1 = __importDefault(require("./routes/chatwoot.webhook.routes"));
 const reservationAdmin_1 = require("./services/reservationAdmin");
 const seed_1 = require("./services/seed");
+const reservationReconciliation_1 = require("./services/reservationReconciliation");
 const app = (0, express_1.default)();
 function renderLegalPage(title, contentHtml) {
     return `<!doctype html>
@@ -46,9 +47,17 @@ function renderLegalPage(title, contentHtml) {
 db_1.db.init()
     .then(() => (0, seed_1.seedConfigs)())
     .then(() => (0, reservationAdmin_1.ensureConfiguredMasterAdmins)())
+    .then(() => (0, reservationReconciliation_1.reconcilePendingReservationAttempts)().catch((err) => {
+    console.error('[ReservationReconciliation] startup run failed:', err?.message || err);
+}))
     .catch((err) => {
     console.error('[Init] startup init failed:', err?.message || err);
 });
+setInterval(() => {
+    (0, reservationReconciliation_1.reconcilePendingReservationAttempts)().catch((err) => {
+        console.error('[ReservationReconciliation] interval run failed:', err?.message || err);
+    });
+}, 2 * 60 * 1000);
 // ─── Express Setup ──────────────────────────────────────────────────────
 app.use(express_1.default.json({ limit: '10mb' }));
 app.use(express_1.default.urlencoded({ extended: true }));

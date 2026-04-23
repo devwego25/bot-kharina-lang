@@ -1,7 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_RESERVATION_LEAD_MINUTES = exports.RESERVATION_LEAD_MINUTES_CONFIG_KEY = void 0;
 exports.normalizeAdminPhone = normalizeAdminPhone;
 exports.listConfiguredMasterPhones = listConfiguredMasterPhones;
+exports.getReservationLeadMinutes = getReservationLeadMinutes;
+exports.setReservationLeadMinutes = setReservationLeadMinutes;
 exports.isConfiguredMasterPhone = isConfiguredMasterPhone;
 exports.ensureConfiguredMasterAdmins = ensureConfiguredMasterAdmins;
 exports.getAdminUser = getAdminUser;
@@ -22,6 +25,8 @@ exports.buildDefaultBlockMessage = buildDefaultBlockMessage;
 exports.describeReservationBlock = describeReservationBlock;
 const env_1 = require("../config/env");
 const db_1 = require("./db");
+exports.RESERVATION_LEAD_MINUTES_CONFIG_KEY = 'reservation_lead_minutes';
+exports.DEFAULT_RESERVATION_LEAD_MINUTES = 240;
 function unique(values) {
     return [...new Set(values)];
 }
@@ -51,6 +56,17 @@ function normalizeTimeInput(raw) {
         return null;
     return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
+function normalizeLeadMinutesInput(raw) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed))
+        return exports.DEFAULT_RESERVATION_LEAD_MINUTES;
+    const rounded = Math.round(parsed);
+    if (rounded < 0)
+        return 0;
+    if (rounded > 24 * 60)
+        return 24 * 60;
+    return rounded;
+}
 function isoDateToWeekday(date) {
     const match = String(date || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match)
@@ -73,6 +89,17 @@ async function getConfiguredMasterPhones() {
 }
 async function listConfiguredMasterPhones() {
     return getConfiguredMasterPhones();
+}
+async function getReservationLeadMinutes() {
+    const configured = await db_1.db.getConfig(exports.RESERVATION_LEAD_MINUTES_CONFIG_KEY);
+    if (configured === null)
+        return exports.DEFAULT_RESERVATION_LEAD_MINUTES;
+    return normalizeLeadMinutesInput(configured);
+}
+async function setReservationLeadMinutes(minutes) {
+    const normalized = normalizeLeadMinutesInput(minutes);
+    await db_1.db.upsertConfig(exports.RESERVATION_LEAD_MINUTES_CONFIG_KEY, String(normalized));
+    return normalized;
 }
 async function isConfiguredMasterPhone(phone) {
     const normalized = normalizeAdminPhone(phone);

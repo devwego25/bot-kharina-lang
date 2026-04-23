@@ -82,6 +82,11 @@ router.post('/webhook/chatwoot', async (req, res) => {
         return;
     }
     try {
+        if (/^(Reserva confirmada:|Consegui confirmar sua reserva\b)/i.test(content)) {
+            const codeMatch = content.match(/\b([A-Z0-9]{6,12})\b/);
+            await (0, whatsapp_1.markReservationAttemptManualConfirmedForUser)(to, codeMatch?.[1]);
+            (0, whatsapp_1.clearReservationDraftForUser)(to);
+        }
         await (0, whatsapp_1.sendWhatsAppText)(to, content);
         console.log(`[Chatwoot Relay] Forwarded agent message to WhatsApp ${to}`);
         res.status(200).json({ ok: true });
