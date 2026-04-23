@@ -5,7 +5,7 @@
 set -e
 
 ENV=${1:-production}
-STACK_NAME="kharina-bot"
+STACK_NAME="kharina-bot-v2"
 VPS_IP="72.60.137.167"
 
 echo "🚀 Deploying Kharina Bot to $ENV environment..."
