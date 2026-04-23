@@ -3218,6 +3218,35 @@ async function sendCitiesMenu(to: string): Promise<void> {
     'Escolha a cidade: Curitiba, Londrina ou São Paulo.');
 }
 
+async function sendFeedbackUnitsMenu(to: string): Promise<void> {
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "Qual loja você visitou para nos enviar sua avaliação?" },
+      action: {
+        button: "Ver lojas",
+        sections: [{
+          title: "Lojas Kharina",
+          rows: [
+            { id: "feedback_unit_cabral", title: "🏘️ Cabral" },
+            { id: "feedback_unit_pdc", title: "🛍️ PDC" },
+            { id: "feedback_unit_londrina", title: "🏙️ Londrina" },
+            { id: "feedback_unit_jardim_botanico", title: "🌿 Jardim Botânico" },
+            { id: "feedback_unit_batel", title: "🏛️ Batel" },
+            { id: "feedback_unit_portao", title: "🚪 Portão" },
+            { id: "feedback_unit_agua_verde", title: "🌳 Água Verde" }
+          ]
+        }]
+      }
+    }
+  };
+  await sendInteractiveWithFallback(to, payload, 'send_feedback_units_menu',
+    'Escolha a unidade: Cabral, PDC, Londrina, Jardim Botânico, Batel, Portão ou Água Verde.');
+}
+
 async function sendUnidadesMenu(to: string): Promise<void> {
   const payload = {
     messaging_product: "whatsapp",
@@ -5422,21 +5451,7 @@ async function handleDeterministicCommand(
       clearReservationDraftState(state);
       clearHelpState(state);
       userStates.set(from, state);
-      await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.central, 'central', 'public_admin_feedback');
-      await addPrivateChatwootNote(
-        from,
-        [
-          'ADMINISTRACAO',
-          'Canal: Sugestões/Críticas',
-          `Telefone cliente: +${toDigitsPhone(from)}`,
-          'Destino: central',
-          'Origem: menu público'
-        ].join('\n')
-      );
-      await sendWhatsAppText(
-        from,
-        'Perfeito. Vou encaminhar sua mensagem para a *Administração*. 😊\n\nEscreva por favor sua sugestão ou crítica por aqui, que a equipe responsável seguirá o atendimento.'
-      );
+      await sendFeedbackUnitsMenu(from);
       return true;
     }
   }
@@ -6514,26 +6529,37 @@ async function handleDeterministicCommand(
     return true;
   }
 
+  if (text.startsWith('feedback_unit_')) {
+    const feedbackLinks: Record<string, string> = {
+      'feedback_unit_cabral': 'https://falae.experienciab2s.com/3795c6ac-c9ad-46aa-9576-99990a8dcee3',
+      'feedback_unit_pdc': 'https://falae.experienciab2s.com/3d853b10-266c-4852-8b82-402e2f8c8d57',
+      'feedback_unit_londrina': 'https://falae.experienciab2s.com/7a25e074-d338-4c34-af41-484bde65fb8a',
+      'feedback_unit_jardim_botanico': 'https://falae.experienciab2s.com/b8b952eb-d3a7-409d-bf1a-f91f2ae785c7',
+      'feedback_unit_batel': 'https://falae.experienciab2s.com/c8cfbb47-5310-4340-914b-d78e026e8b1e',
+      'feedback_unit_portao': 'https://falae.experienciab2s.com/cae97e8a-b52a-4d37-805a-63fd1599f5e1',
+      'feedback_unit_agua_verde': 'https://falae.experienciab2s.com/edc566d8-8f00-4308-965a-b0b7a62be733'
+    };
+    
+    if (feedbackLinks[text]) {
+      clearReservationDraftState(state);
+      clearHelpState(state);
+      state.has_interacted = true;
+      userStates.set(from, state);
+      
+      await sendWhatsAppText(
+        from,
+        `Muito obrigado pela sua visita! 😊\n\nSua opinião é super importante para podermos melhorar sempre. Por favor, registre sua avaliação ou sugestão no link abaixo:\n\n${feedbackLinks[text]}`
+      );
+    }
+    return true;
+  }
+
   if (text === 'public_admin_feedback') {
     clearReservationDraftState(state);
     clearHelpState(state);
     state.has_interacted = true;
     userStates.set(from, state);
-    await assignChatwootConversationToTeam(from, CHATWOOT_TEAM_IDS.central, 'central', 'public_admin_feedback');
-    await addPrivateChatwootNote(
-      from,
-      [
-        'ADMINISTRACAO',
-        'Canal: Sugestões/Críticas',
-        `Telefone cliente: +${toDigitsPhone(from)}`,
-        'Destino: central',
-        'Origem: menu público'
-      ].join('\n')
-    );
-    await sendWhatsAppText(
-      from,
-      'Perfeito. Vou encaminhar sua mensagem para a *Administração*. 😊\n\nEscreva por favor sua sugestão ou crítica por aqui, que a equipe responsável seguirá o atendimento.'
-    );
+    await sendFeedbackUnitsMenu(from);
     return true;
   }
 
