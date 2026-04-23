@@ -77,6 +77,29 @@ def _extract_reservation_updates(output: str, request: ChatRequest) -> Dict[str,
     if request.context and request.context.user_name:
         updates["name"] = updates.get("name") or request.context.user_name
 
+    # --- Extract preferred unit name ---
+    combined_text = f"{output} {request.message}".lower()
+    units_mapping = {
+        "jardim botânico": "Jardim Botânico",
+        "botânico": "Jardim Botânico",
+        "botanico": "Jardim Botânico",
+        "cabral": "Cabral",
+        "água verde": "Água Verde",
+        "agua verde": "Água Verde",
+        "batel": "Batel",
+        "portão": "Portão",
+        "portao": "Portão",
+        "londrina": "Londrina",
+        "são paulo": "São Paulo",
+        "sao paulo": "São Paulo",
+        "pdc": "São Paulo",
+        "parque da cidade": "São Paulo"
+    }
+    for key, val in units_mapping.items():
+        if key in combined_text:
+            updates["preferred_unit_name"] = val
+            break
+
     return updates
 
 router = APIRouter()
@@ -272,12 +295,16 @@ async def chat(request: ChatRequest) -> ChatResponse:
             # confirmation menu with real data instead of "❓ Pendente"
             reservation_updates = _extract_reservation_updates(output, request)
             if reservation_updates:
+                if "preferred_unit_name" in reservation_updates:
+                    state_updates["preferred_unit_name"] = reservation_updates.pop("preferred_unit_name")
                 state_updates["reservation_state"] = reservation_updates
                 logger.info(f"Propagating reservation state: {reservation_updates}")
         elif intent in ("criar_reserva", "interesse_reserva"):
             # Progressively update reservation state even before confirmation
             reservation_updates = _extract_reservation_updates(output, request)
             if reservation_updates:
+                if "preferred_unit_name" in reservation_updates:
+                    state_updates["preferred_unit_name"] = reservation_updates.pop("preferred_unit_name")
                 state_updates["reservation_state"] = reservation_updates
         
         # Save to memory (only if not a pure menu command)
