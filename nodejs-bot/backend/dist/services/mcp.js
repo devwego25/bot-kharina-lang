@@ -113,6 +113,9 @@ class McpClient {
     // ═══════════════════════════════════════════════════════════════════
     async connectStreamable() {
         this.isConnecting = true;
+        // Start a fresh streamable handshake without stale session metadata.
+        this.sessionEndpoint = null;
+        this.sessionId = null;
         console.log(`[MCP ${this.name}] Connecting via Streamable HTTP to ${this.baseUrl}`);
         try {
             // Direct POST initialize to the base URL

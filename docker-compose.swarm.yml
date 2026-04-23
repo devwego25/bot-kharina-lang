@@ -64,7 +64,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
-      - LANGCHAIN_URL=http://langchain:8000
+      - LANGCHAIN_URL=http://kharina-bot-v2_langchain:8000
       - CHATWOOT_URL=${CHATWOOT_URL}
       - CHATWOOT_TOKEN=${CHATWOOT_TOKEN}
       - CHATWOOT_ACCOUNT_ID=${CHATWOOT_ACCOUNT_ID}
