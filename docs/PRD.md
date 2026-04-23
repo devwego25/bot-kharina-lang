@@ -96,7 +96,7 @@ REGRAS:
 RESTAURANTE:
 - Horários: Seg-Dom 12h às 23h
 - Unidades: Principal, Jardim Botânico, Centro
-- Reservas: até 20 pessoas por mesa
+- Reservas: não informar limite fixo de pessoas por mesa; a acomodação pode variar conforme a configuração e disponibilidade de cada unidade
 ```
 
 ***

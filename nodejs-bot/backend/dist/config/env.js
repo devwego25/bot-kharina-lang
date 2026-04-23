@@ -19,6 +19,17 @@ function normalizeModelName(model, fallback) {
 const defaultModel = normalizeModelName(process.env.OPENAI_MODEL, 'gpt-4o-mini');
 exports.config = {
     port: process.env.PORT || 3000,
+    admin: {
+        masterPhones: String(process.env.ADMIN_MASTER_PHONES || '')
+            .split(',')
+            .map((value) => value.replace(/\D/g, '').trim())
+            .filter(Boolean),
+    },
+    reservasApi: {
+        url: process.env.RESERVAS_API_URL || 'https://api.reservas.kharina.com.br/api',
+        adminEmail: process.env.RESERVAS_API_ADMIN_EMAIL || '',
+        adminPassword: process.env.RESERVAS_API_ADMIN_PASSWORD || '',
+    },
     whatsapp: {
         token: process.env.WHATSAPP_TOKEN,
         phoneId: process.env.WHATSAPP_PHONE_ID,

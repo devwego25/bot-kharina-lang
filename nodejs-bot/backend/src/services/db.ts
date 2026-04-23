@@ -93,6 +93,34 @@ export const db = {
             content TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS admin_users (
+            phone VARCHAR(32) PRIMARY KEY,
+            role VARCHAR(16) NOT NULL CHECK (role IN ('master', 'admin')),
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by VARCHAR(32),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS reservation_blocks (
+            id BIGSERIAL PRIMARY KEY,
+            store_id VARCHAR(64) NOT NULL,
+            store_name VARCHAR(128) NOT NULL,
+            weekday SMALLINT NULL CHECK (weekday BETWEEN 0 AND 6),
+            start_time VARCHAR(5) NOT NULL,
+            end_time VARCHAR(5) NOT NULL,
+            mode VARCHAR(32) NOT NULL CHECK (mode IN ('deny', 'suggest_alternative', 'handoff')),
+            message TEXT NOT NULL,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by VARCHAR(32) NOT NULL,
+            updated_by VARCHAR(32),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_admin_users_active_role ON admin_users (active, role);
+        CREATE INDEX IF NOT EXISTS idx_reservation_blocks_lookup ON reservation_blocks (active, store_id, weekday, start_time, end_time);
       `;
         try {
             await pool.query(createTableText);

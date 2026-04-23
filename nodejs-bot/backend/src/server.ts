@@ -7,6 +7,7 @@ import configRoutes from './routes/config.routes';
 import adminRoutes from './routes/admin.routes';
 import whatsappRoutes from './routes/whatsapp.routes';
 import chatwootWebhookRoutes from './routes/chatwoot.webhook.routes';
+import { ensureConfiguredMasterAdmins } from './services/reservationAdmin';
 import { seedConfigs } from './services/seed';
 
 const app = express();
@@ -40,7 +41,12 @@ function renderLegalPage(title: string, contentHtml: string) {
 }
 
 // ─── Initialize DB ──────────────────────────────────────────────────────
-db.init().then(() => seedConfigs());
+db.init()
+  .then(() => seedConfigs())
+  .then(() => ensureConfiguredMasterAdmins())
+  .catch((err) => {
+    console.error('[Init] startup init failed:', err?.message || err);
+  });
 
 // ─── Express Setup ──────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
