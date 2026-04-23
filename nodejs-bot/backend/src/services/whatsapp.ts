@@ -3232,7 +3232,7 @@ async function sendFeedbackUnitsMenu(to: string): Promise<void> {
           title: "Lojas Kharina",
           rows: [
             { id: "feedback_unit_cabral", title: "🏘️ Cabral" },
-            { id: "feedback_unit_pdc", title: "🛍️ PDC" },
+            { id: "feedback_unit_pdc", title: "🌆 São Paulo", description: "Parque da Cidade" },
             { id: "feedback_unit_londrina", title: "🏙️ Londrina" },
             { id: "feedback_unit_jardim_botanico", title: "🌿 Jardim Botânico" },
             { id: "feedback_unit_batel", title: "🏛️ Batel" },
