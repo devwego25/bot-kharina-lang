@@ -34,12 +34,12 @@ fi
 
 # Build Python LangChain image
 echo -e "${YELLOW}🐍 Building Python LangChain image...${NC}"
-docker build -t kharina-langchain:latest ./python-langchain/
+docker build -t kharina-langchain-v2:latest ./python-langchain/
 
 # Build Node.js Backend image
 echo -e "${YELLOW}🟢 Building Node.js Backend image...${NC}"
 cd nodejs-bot/backend
-docker build -t kharina-backend:latest .
+docker build -t kharina-backend-v2:latest .
 cd ../..
 
 # Deploy to Swarm
