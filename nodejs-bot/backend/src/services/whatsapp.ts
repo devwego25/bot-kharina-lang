@@ -5546,30 +5546,40 @@ async function handleDeterministicCommand(
   }
 
   if (state.reservation?.awaiting_manual_review) {
-    if (isExternalReservationResolved) {
-      await markLatestAttemptManualConfirmed(from);
+    // Auto-expire manual review after 6 hours to prevent indefinite bot lockout
+    const MANUAL_REVIEW_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
+    const reviewStartedAt = Number(state.reservation.manual_review_last_notice_at || 0);
+    if (reviewStartedAt && (Date.now() - reviewStartedAt > MANUAL_REVIEW_TIMEOUT_MS)) {
+      console.log(`[ManualReview] Auto-expired for ${from} after 6h — clearing state`);
       clearReservationDraftState(state);
       userStates.set(from, state);
-      await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
-      return true;
-    }
-
-    if (text !== 'MENU_PRINCIPAL' && normalized !== 'menu' && normalized !== 'inicio' && normalized !== 'voltar') {
-      const now = Date.now();
-      const lastNoticeAt = Number(state.reservation.manual_review_last_notice_at || 0);
-      const isGenericPing = isGenericManualReviewPing(normalizedNoAccent);
-      const needsReply = shouldAnswerDuringManualReview(normalizedNoAccent) || !lastNoticeAt;
-      const cooldownMs = isGenericPing ? 30 * 60 * 1000 : 2 * 60 * 1000;
-
-      if (!needsReply || (lastNoticeAt && now - lastNoticeAt < cooldownMs)) {
+      // Fall through to normal processing
+    } else {
+      if (isExternalReservationResolved) {
+        await markLatestAttemptManualConfirmed(from);
+        clearReservationDraftState(state);
+        userStates.set(from, state);
+        await sendWhatsAppText(from, 'Perfeito! 😊 Considerei essa reserva como resolvida por aqui. Se precisar de algo novo, é só me chamar.');
         return true;
       }
 
-      state.reservation.manual_review_last_notice_at = now;
-      userStates.set(from, state);
-      await assignChatwootConversationToUnitManager(from, state.preferred_unit_name, 'reservation_manual_review');
-      await sendWhatsAppText(from, getManualReviewMessage(state));
-      return true;
+      if (text !== 'MENU_PRINCIPAL' && normalized !== 'menu' && normalized !== 'inicio' && normalized !== 'voltar') {
+        const now = Date.now();
+        const lastNoticeAt = Number(state.reservation.manual_review_last_notice_at || 0);
+        const isGenericPing = isGenericManualReviewPing(normalizedNoAccent);
+        const needsReply = shouldAnswerDuringManualReview(normalizedNoAccent) || !lastNoticeAt;
+        const cooldownMs = isGenericPing ? 30 * 60 * 1000 : 2 * 60 * 1000;
+
+        if (!needsReply || (lastNoticeAt && now - lastNoticeAt < cooldownMs)) {
+          return true;
+        }
+
+        state.reservation.manual_review_last_notice_at = now;
+        userStates.set(from, state);
+        await assignChatwootConversationToUnitManager(from, state.preferred_unit_name, 'reservation_manual_review');
+        await sendWhatsAppText(from, getManualReviewMessage(state));
+        return true;
+      }
     }
   }
 

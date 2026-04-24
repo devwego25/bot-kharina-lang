@@ -23,6 +23,22 @@ function extractPhone(payload: any): string {
   return '';
 }
 
+/** Detect if a human agent message is confirming a reservation. */
+function isReservationConfirmationMessage(content: string): boolean {
+  const c = content.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return (
+    /reserva.*confirm/i.test(c) ||
+    /confirm.*reserva/i.test(c) ||
+    /^reserva confirmada/i.test(content) ||
+    /^consegui confirmar/i.test(content) ||
+    /sua reserva.*esta.*confirmada/i.test(c) ||
+    /reserva.*feita/i.test(c) ||
+    /reserva.*realizada/i.test(c) ||
+    /reserva.*ok/i.test(c) ||
+    /reserva.*pronta/i.test(c)
+  );
+}
+
 function shouldRelay(payload: any): { ok: boolean; reason?: string } {
   const event = String(payload?.event || '');
   if (event !== 'message_created') return { ok: false, reason: `event=${event}` };
@@ -67,6 +83,26 @@ router.post('/webhook/chatwoot', async (req: Request, res: Response) => {
   }
 
   const payload = req.body || {};
+  const event = String(payload?.event || '');
+
+  // ── Handle conversation_updated (unassignment) ────────────────────────
+  if (event === 'conversation_updated') {
+    const changes = payload?.changed_attributes || {};
+    const to = extractPhone(payload);
+    // When assignee is removed (set to null/undefined), clear manual review state
+    const assigneeChanged = changes?.assignee_id;
+    if (assigneeChanged && to) {
+      const newAssignee = assigneeChanged?.current_value;
+      if (!newAssignee || newAssignee === null) {
+        console.log(`[Chatwoot Relay] Conversation unassigned for ${to} — clearing manual_review state`);
+        clearReservationDraftForUser(to);
+      }
+    }
+    res.status(200).json({ ok: true, handled: 'conversation_updated' });
+    return;
+  }
+
+  // ── Handle message_created (relay agent messages) ─────────────────────
   const relayCheck = shouldRelay(payload);
   if (!relayCheck.ok) {
     console.log(`[Chatwoot Relay] Ignored: ${relayCheck.reason}`);
@@ -90,10 +126,12 @@ router.post('/webhook/chatwoot', async (req: Request, res: Response) => {
   }
 
   try {
-    if (/^(Reserva confirmada:|Consegui confirmar sua reserva\b)/i.test(content)) {
+    // Broader detection of human reservation confirmations
+    if (isReservationConfirmationMessage(content)) {
       const codeMatch = content.match(/\b([A-Z0-9]{6,12})\b/);
       await markReservationAttemptManualConfirmedForUser(to, codeMatch?.[1]);
       clearReservationDraftForUser(to);
+      console.log(`[Chatwoot Relay] Detected reservation confirmation for ${to}, cleared manual_review`);
     }
     await sendWhatsAppText(to, content);
     console.log(`[Chatwoot Relay] Forwarded agent message to WhatsApp ${to}`);
