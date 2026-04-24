@@ -3018,23 +3018,34 @@ async function postGraphMessage(payload: any, label: string, retries = 2): Promi
 }
 
 async function downloadWhatsAppMedia(mediaId: string): Promise<Buffer | null> {
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  const httpsAgent = proxyUrl ? new SocksProxyAgent(proxyUrl) : undefined;
+  const axiosConfig: any = {
+    headers: { Authorization: `Bearer ${config.whatsapp.token}` },
+    timeout: GRAPH_API_TIMEOUT_MS
+  };
+  if (proxyUrl) {
+    axiosConfig.httpsAgent = httpsAgent;
+    axiosConfig.proxy = false;
+  }
+
   try {
     const token = config.whatsapp.token;
     // 1. Get media URL
-    const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const urlRes = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, axiosConfig);
     const downloadUrl = (urlRes.data as any)?.url;
+    console.log(`[WhatsApp Media] Media ID ${mediaId} -> URL: ${downloadUrl ? (downloadUrl.substring(0, 50) + '...') : 'NULL'}`);
+    
     if (!downloadUrl) return null;
 
     // 2. Download binary
-    const mediaRes = await axios.get(downloadUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-      responseType: 'arraybuffer'
-    });
+    const downloadConfig = { ...axiosConfig, responseType: 'arraybuffer' };
+    const mediaRes = await axios.get(downloadUrl, downloadConfig);
     return Buffer.from(mediaRes.data as ArrayBuffer);
   } catch (err: any) {
     console.error(`[WhatsApp Media] Download failed for ${mediaId}:`, err.message);
+    if (err.stack) console.error(err.stack);
+    if (err.config) console.error(`[WhatsApp Media] Error config URL: ${err.config.url}`);
     return null;
   }
 }
@@ -7170,7 +7181,26 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
       console.log(`[WhatsApp] Media received from ${from}: ID ${mediaId}`);
     }
 
-    // Check bot active
+    // --- SYNC TO CHATWOOT (Always Sync) ---
+    if (mediaId) {
+      // Download and sync media to Chatwoot (async)
+      downloadWhatsAppMedia(mediaId).then(mediaBuf => {
+        if (mediaBuf) {
+          chatwootService.syncMediaMessage(from, userName, mediaBuf, fileName, mimeType, 'incoming', { source: 'whatsapp' }).catch(err => {
+            console.error(`[Chatwoot] async media sync failed for ${from}:`, err?.message || err);
+          });
+        }
+      }).catch(err => {
+          console.error(`[WhatsApp] Media download/sync chain failed for ${from}:`, err?.message || err);
+      });
+    } else {
+      const chatwootIncomingText = formatIncomingForChatwoot(message, text);
+      chatwootService.syncMessage(from, userName, chatwootIncomingText, 'incoming', { source: 'whatsapp' }).catch((err) => {
+        console.error(`[Chatwoot] async incoming sync failed for ${from}:`, err?.message || err);
+      });
+    }
+
+    // Check bot active (controls ONLY the agent response)
     const botActiveStart = Date.now();
     const botActive = await checkBotActiveFast(from);
     logStep('checkBotActive', botActiveStart);
@@ -7178,21 +7208,6 @@ async function processMessageInternal(message: any, value: any): Promise<void> {
 
     // Send typing indicator
     sendTypingIndicator(from, message.id).catch(() => { });
-
-    if (mediaId) {
-      // Download and sync media to Chatwoot (async)
-      const mediaBuf = await downloadWhatsAppMedia(mediaId);
-      if (mediaBuf) {
-        chatwootService.syncMediaMessage(from, userName, mediaBuf, fileName, mimeType, 'incoming', { source: 'whatsapp' }).catch(err => {
-            console.error(`[Chatwoot] async media sync failed for ${from}:`, err?.message || err);
-        });
-      }
-    } else {
-      const chatwootIncomingText = formatIncomingForChatwoot(message, text);
-      chatwootService.syncMessage(from, userName, chatwootIncomingText, 'incoming', { source: 'whatsapp' }).catch((err) => {
-        console.error(`[Chatwoot] async incoming sync failed for ${from}:`, err?.message || err);
-      });
-    }
 
     // Prompt injection check
     if (isPromptInjection(text)) {
