@@ -1530,21 +1530,37 @@ function sanitizeAgentFallbackPhone(text: string, from: string, state?: UserStat
   if (!text) return text;
   const t = String(text);
   const lower = t.toLowerCase();
+  const isDeliverySupportFallback =
+    (lower.includes('delivery') || lower.includes('ifood') || lower.includes('pedido')) &&
+    (
+      lower.includes('ajuda') ||
+      lower.includes('reclama') ||
+      lower.includes('problema') ||
+      lower.includes('suporte') ||
+      lower.includes('atras')
+    );
+  if (isDeliverySupportFallback) return t;
+
   const isUnitFallback =
     lower.includes('unidade') &&
     (lower.includes('falar direto') || lower.includes('telefone') || lower.includes('contato'));
-  if (!isUnitFallback) return t;
+  const hasPhone = /\+?\d[\d\s().-]{8,}\d/g.test(t);
+  if (!isUnitFallback && !hasPhone) return t;
 
-  const unitName = String(state?.preferred_unit_name || '').trim();
+  const mentionedUnit = getMentionedUnitFromText(t);
+  const unitName = String(mentionedUnit?.name || state?.preferred_unit_name || '').trim();
   const unitPhone = UNIT_PHONE_BY_NAME[unitName];
-  if (!unitPhone) return t;
-
-  const fromDigits = toDigitsPhone(from);
-  if (!fromDigits) return t;
+  if (!unitPhone) return t.replace(/\bAqui está o telefone da unidade mais próxima:\s*📞?\s*\+?\d[\d\s().-]{8,}\d[^\n]*/gi, 'Se você me disser a unidade, eu te passo o telefone fixo correto.');
 
   return t.replace(/\+?\d[\d\s().-]{8,}\d/g, (raw) => {
     const digits = raw.replace(/\D/g, '');
-    return digits === fromDigits ? unitPhone : raw;
+    const normalizedRaw = digits.startsWith('55') ? digits.slice(2) : digits;
+    const normalizedUnitPhone = unitPhone.replace(/\D/g, '');
+    const isKnownDeliveryCell = Object.values(DELIVERY_HELP_PHONE_BY_CONTEXT).some((phone) => phone.replace(/\D/g, '') === normalizedRaw);
+    const looksLikeCellphone = normalizedRaw.length === 11 && normalizedRaw[2] === '9';
+    if (isKnownDeliveryCell || looksLikeCellphone) return unitPhone;
+    if (normalizedRaw === normalizedUnitPhone) return unitPhone;
+    return raw;
   });
 }
 
@@ -5235,6 +5251,12 @@ async function handleDeterministicCommand(
   const isHappyHourCardapioIntent =
     /\bhappy\s*hour\b/.test(normalizedNoAccent) &&
     /\b(cardapio|cardápio|menu|itens?)\b/.test(normalizedNoAccent);
+  const isGeneralPromotionQuestion =
+    (
+      /\b(promoc[aã]o|promocoes|promo[cç][aã]o|desconto|em dobro|dobro|2x1|dois por um)\b/.test(normalizedNoAccent) &&
+      /\b(hamburg|burger|burguer|lanche|combo|happy hour|batata|classico|classicos)\b/.test(normalizedNoAccent)
+    ) &&
+    !isHappyHourQuestion;
   const isPetFriendlyQuestion =
     /\bpet\s*friend(?:ly)?\b/.test(normalizedNoAccent) ||
     (
@@ -5912,6 +5934,26 @@ async function handleDeterministicCommand(
     state.pending_offer = undefined;
     userStates.set(from, state);
     await sendWhatsAppText(from, HAPPY_HOUR_INFO_TEXT);
+    return true;
+  }
+
+  if (isGeneralPromotionQuestion) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      await sendWhatsAppText(
+        from,
+        `Essa promoção pode variar conforme a *unidade* e o *dia*. 😊\n\nNa unidade *${unitName}*, o melhor é confirmar direto com a equipe pelo telefone fixo *${unitPhone}*.`
+      );
+      return true;
+    }
+
+    state.pending_offer = 'unit_contact_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Essa promoção pode variar conforme a *unidade* e o *dia*. 😊\n\nMe diga qual unidade você quer consultar que eu te passo o *telefone fixo* certo para confirmar.'
+    );
     return true;
   }
 
