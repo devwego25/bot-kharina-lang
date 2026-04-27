@@ -5,20 +5,28 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.chatwootService = exports.ChatwootService = void 0;
 const axios_1 = __importDefault(require("axios"));
+const form_data_1 = __importDefault(require("form-data"));
 const env_1 = require("../config/env");
+const SOFT_HANDOFF_ROUTE_REASONS = new Set([
+    'reservation_manual_review',
+    'unit_contact',
+    'unit_contact_offer'
+]);
+const HARD_HANDOFF_ROUTE_REASONS = new Set([
+    'lost_found',
+    'human_handoff',
+    'unit_problem',
+    'public_admin_compras',
+    'public_admin_financeiro',
+    'public_admin_rh_employee',
+    'public_admin_rh_candidate'
+]);
 class ChatwootService {
     baseUrl;
     accountId;
     inboxId;
     headers;
     client;
-    circuitBreaker = {
-        failureCount: 0,
-        lastFailure: 0,
-        degradedUntil: 0,
-        THRESHOLD: 3,
-        COOLDOWN_MS: 30 * 1000 // 30 seconds initial cooldown
-    };
     constructor() {
         this.baseUrl = env_1.config.chatwoot.url?.replace(/\/$/, '') || '';
         this.accountId = env_1.config.chatwoot.accountId || '';
@@ -31,33 +39,13 @@ class ChatwootService {
             timeout: 5000
         });
     }
-    isDegraded() {
-        if (this.circuitBreaker.degradedUntil > Date.now()) {
-            return true;
-        }
-        return false;
-    }
-    reportSuccess() {
-        this.circuitBreaker.failureCount = 0;
-        this.circuitBreaker.degradedUntil = 0;
-    }
-    reportFailure() {
-        this.circuitBreaker.failureCount++;
-        this.circuitBreaker.lastFailure = Date.now();
-        if (this.circuitBreaker.failureCount >= this.circuitBreaker.THRESHOLD) {
-            console.error(`[Chatwoot] Circuit breaker ACTIVATED. Entering degraded mode for ${this.circuitBreaker.COOLDOWN_MS / 1000}s`);
-            this.circuitBreaker.degradedUntil = Date.now() + this.circuitBreaker.COOLDOWN_MS;
-            this.circuitBreaker.failureCount = 0; // Reset count to prevent infinite rapid state flips
-        }
-    }
     /**
      * Sincroniza uma mensagem com o Chatwoot.
      * Cuida da criação do contato e da conversa automaticamente.
      */
     async syncMessage(phone, name, content, type, attributes = {}, isPrivate = false) {
-        if (!this.baseUrl || !this.headers.api_access_token || this.isDegraded()) {
-            if (this.isDegraded())
-                console.log('[Chatwoot] Service degraded. Skipping sync.');
+        if (!this.baseUrl || !this.headers.api_access_token) {
+            console.warn('[Chatwoot] Service not configured. Skipping sync.');
             return null;
         }
         try {
@@ -67,13 +55,44 @@ class ChatwootService {
             const conversationId = await this.getOrCreateConversation(contactId, phone);
             if (!conversationId)
                 return null;
-            const result = await this.sendMessage(conversationId, content, type, attributes, isPrivate);
-            this.reportSuccess();
-            return result;
+            return await this.sendMessage(conversationId, content, type, attributes, isPrivate);
         }
         catch (err) {
             console.error('[Chatwoot] Sync Error:', err.response?.data || err.message);
-            this.reportFailure();
+            return null;
+        }
+    }
+    /**
+     * Sincroniza uma mensagem com anexo (mídia) com o Chatwoot.
+     */
+    async syncMediaMessage(phone, name, mediaBuffer, fileName, mimeType, type, attributes = {}) {
+        if (!this.baseUrl || !this.headers.api_access_token) {
+            console.warn('[Chatwoot] Service not configured. Skipping media sync.');
+            return null;
+        }
+        try {
+            const contactId = await this.getOrCreateContact(phone, name);
+            if (!contactId)
+                return null;
+            const conversationId = await this.getOrCreateConversation(contactId, phone);
+            if (!conversationId)
+                return null;
+            const form = new form_data_1.default();
+            form.append('content', attributes.source === 'whatsapp' ? '[Anexo do WhatsApp]' : '');
+            form.append('message_type', type);
+            form.append('private', 'false');
+            form.append('attachments[]', mediaBuffer, { filename: fileName, contentType: mimeType });
+            const url = `${this.baseUrl}/api/v1/accounts/${this.accountId}/conversations/${conversationId}/messages`;
+            const response = await axios_1.default.post(url, form, {
+                headers: {
+                    ...form.getHeaders(),
+                    'api_access_token': this.headers.api_access_token
+                }
+            });
+            return response.data;
+        }
+        catch (err) {
+            console.error('[Chatwoot] Sync Media Error:', err.response?.data || err.message);
             return null;
         }
     }
@@ -83,7 +102,7 @@ class ChatwootService {
      * Retorna false se um humano assumiu ou se houver erro (na dúvida, pausa o bot).
      */
     async checkBotActive(phone, signal) {
-        if (!this.baseUrl || !this.headers.api_access_token || this.isDegraded())
+        if (!this.baseUrl || !this.headers.api_access_token)
             return true;
         try {
             // 1. Buscar contato
@@ -91,10 +110,8 @@ class ChatwootService {
             const searchResp = await this.client.get(searchUrl, { headers: this.headers, signal });
             const searchData = searchResp.data;
             const contact = searchData.payload?.[0];
-            if (!contact) {
-                this.reportSuccess();
+            if (!contact)
                 return true; // Novo contato, bot ativo
-            }
             // 2. Buscar conversas
             const convsUrl = `${this.baseUrl}/api/v1/accounts/${this.accountId}/contacts/${contact.id}/conversations`;
             const convsResp = await this.client.get(convsUrl, { headers: this.headers, signal });
@@ -104,39 +121,35 @@ class ChatwootService {
             const activeConv = conversations.find((c) => c.status !== 'resolved');
             if (!activeConv) {
                 console.log(`[Chatwoot] checkBotActive: No active conversation found for ${phone}`);
-                this.reportSuccess();
                 return true;
             }
             console.log(`[Chatwoot] checkBotActive: Found conversation ${activeConv.id}. Status: ${activeConv.status}. Assignee: ${JSON.stringify(activeConv.meta?.assignee)}`);
             const hasAssignee = activeConv.meta?.assignee !== null && activeConv.meta?.assignee !== undefined;
-            // Bloquear se houver equipe, EXCETO se for a equipe 'gerência' (ID 8)
             const teamId = activeConv.meta?.team?.id;
             const hasBlockingTeam = teamId !== null && teamId !== undefined && teamId !== 8;
-            console.log(`[Chatwoot] checkBotActive details for ${activeConv.id}: hasAssignee=${hasAssignee}, teamId=${teamId}, hasBlockingTeam=${hasBlockingTeam}, assignee=${JSON.stringify(activeConv.meta?.assignee)}`);
-            // Bloquear se houver humano OU equipe responsável (exceto gerência)
-            const isHumanHandled = hasAssignee || hasBlockingTeam;
+            const routeReason = activeConv.custom_attributes?.route_reason
+                || activeConv.additional_attributes?.route_reason
+                || activeConv.meta?.custom_attributes?.route_reason
+                || null;
+            const isSoftAutomationRoute = routeReason ? SOFT_HANDOFF_ROUTE_REASONS.has(routeReason) : false;
+            const isHardHandoffRoute = routeReason ? HARD_HANDOFF_ROUTE_REASONS.has(routeReason) : false;
+            console.log(`[Chatwoot] checkBotActive details for ${activeConv.id}: hasAssignee=${hasAssignee}, teamId=${teamId}, hasBlockingTeam=${hasBlockingTeam}, routeReason=${routeReason}, softRoute=${isSoftAutomationRoute}, hardRoute=${isHardHandoffRoute}, assignee=${JSON.stringify(activeConv.meta?.assignee)}`);
+            // Handoffs leves não devem travar o bot; handoffs fortes continuam bloqueando.
+            const isHumanHandled = isSoftAutomationRoute
+                ? false
+                : isHardHandoffRoute || hasAssignee || hasBlockingTeam;
             if (isHumanHandled) {
                 console.log(`[Chatwoot] Humano/Equipe detectado na conversa ${activeConv.id}. Bot silenciado.`);
-                this.reportSuccess();
                 return false;
             }
-            this.reportSuccess();
             return true;
         }
         catch (err) {
-            if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') {
-                console.warn('[Chatwoot] checkBotActive timed out or was cancelled.');
-            }
-            else {
-                console.error('[Chatwoot] Error checking bot status:', err.message);
-                this.reportFailure();
-            }
+            console.error('[Chatwoot] Error checking bot status:', err.message);
             return true; // Na dúvida, deixa o bot ativo para não deixar o cliente no vácuo
         }
     }
     async updateConversation(phone, updates) {
-        if (this.isDegraded())
-            return null;
         try {
             // 1. Buscar contato e conversa (reusando lógica interna se possível, ou refazendo busca rápida)
             const contactId = await this.getOrCreateContact(phone, '');
@@ -166,12 +179,10 @@ class ChatwootService {
                 await this.client.patch(url, updates, { headers: this.headers });
                 console.log(`[Chatwoot] Conversation ${conversationId} updated (status/meta):`, updates);
             }
-            this.reportSuccess();
             return conversationId;
         }
         catch (err) {
             console.error('[Chatwoot] Error updating conversation:', err.response?.data || err.message);
-            this.reportFailure();
             return null;
         }
     }

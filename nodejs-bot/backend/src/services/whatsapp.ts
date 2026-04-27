@@ -2809,7 +2809,6 @@ async function createReservationDeterministic(from: string, state: UserState): P
       ).catch((err) => {
         console.error('[Chatwoot] reservation alert failed:', err?.message || err);
       });
-      await assignChatwootConversationToUnitManager(from, unitName, 'reservation_manual_review');
       return {
         ok: false,
         message: 'Tive uma instabilidade para confirmar sua reserva com segurança agora 😕\nPor favor, tente novamente em alguns minutos. Se preferir, nosso time já foi alertado para verificar por aqui.'
@@ -2971,7 +2970,6 @@ async function createReservationDeterministic(from: string, state: UserState): P
     if (state.reservation) state.reservation.awaiting_manual_review = true;
     if (state.reservation) state.reservation.manual_review_last_notice_at = Date.now();
     userStates.set(from, state);
-    await assignChatwootConversationToUnitManager(from, unitName, 'reservation_manual_review');
     return {
       ok: false,
       message: 'Tive uma instabilidade para concluir sua reserva agora 😕\nPor favor, tente novamente em alguns minutos. Nosso time também foi alertado para verificar.'
@@ -5576,7 +5574,6 @@ async function handleDeterministicCommand(
 
         state.reservation.manual_review_last_notice_at = now;
         userStates.set(from, state);
-        await assignChatwootConversationToUnitManager(from, state.preferred_unit_name, 'reservation_manual_review');
         await sendWhatsAppText(from, getManualReviewMessage(state));
         return true;
       }
@@ -5708,7 +5705,6 @@ async function handleDeterministicCommand(
         from,
         `Claro! O contato da unidade *${unitName}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com reserva, cardápio ou delivery.`
       );
-      await assignChatwootConversationToUnitManager(from, unitName, 'unit_contact_offer');
       return true;
     }
 
@@ -5821,7 +5817,32 @@ async function handleDeterministicCommand(
     return true;
   }
 
-  if (isGourmetQuestion || isHumanAssistanceRequest) {
+  if (isGourmetQuestion) {
+    const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
+    const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
+    if (unitName && unitPhone) {
+      state.pending_offer = undefined;
+      state.reservation = undefined;
+      state.preferred_store_id = undefined;
+      state.preferred_unit_name = unitName;
+      userStates.set(from, state);
+      await sendWhatsAppText(
+        from,
+        `Claro! O contato da unidade *${unitName}* é *${unitPhone}*.\n\nComo esse tipo de assunto precisa da equipe da loja, o melhor é falar direto com eles por lá.`
+      );
+      return true;
+    }
+
+    state.pending_offer = 'unit_contact_offer';
+    userStates.set(from, state);
+    await sendWhatsAppText(
+      from,
+      'Me diga qual loja/unidade você quer consultar que eu te passo o contato certo.'
+    );
+    return true;
+  }
+
+  if (isHumanAssistanceRequest) {
     const unitName = mentionedUnit?.name || state.preferred_unit_name || '';
     const unitPhone = unitName ? UNIT_PHONE_BY_NAME[unitName] : '';
     if (unitName && unitPhone) {
@@ -5933,7 +5954,6 @@ async function handleDeterministicCommand(
         from,
         `Claro! O contato da unidade *${contactTargetUnit}* é *${unitPhone}*.\n\nSe quiser, também posso te ajudar com a reserva por aqui. 😊`
       );
-      await assignChatwootConversationToUnitManager(from, contactTargetUnit, 'unit_contact');
       return true;
     }
   }

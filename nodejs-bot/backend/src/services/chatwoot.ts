@@ -2,6 +2,22 @@ import axios from 'axios';
 import FormData from 'form-data';
 import { config } from '../config/env';
 
+const SOFT_HANDOFF_ROUTE_REASONS = new Set([
+    'reservation_manual_review',
+    'unit_contact',
+    'unit_contact_offer'
+]);
+
+const HARD_HANDOFF_ROUTE_REASONS = new Set([
+    'lost_found',
+    'human_handoff',
+    'unit_problem',
+    'public_admin_compras',
+    'public_admin_financeiro',
+    'public_admin_rh_employee',
+    'public_admin_rh_candidate'
+]);
+
 export class ChatwootService {
     private baseUrl: string;
     private accountId: string;
@@ -116,14 +132,22 @@ export class ChatwootService {
             console.log(`[Chatwoot] checkBotActive: Found conversation ${activeConv.id}. Status: ${activeConv.status}. Assignee: ${JSON.stringify(activeConv.meta?.assignee)}`);
 
             const hasAssignee = activeConv.meta?.assignee !== null && activeConv.meta?.assignee !== undefined;
-            // Bloquear se houver equipe, EXCETO se for a equipe 'gerência' (ID 8)
             const teamId = activeConv.meta?.team?.id;
             const hasBlockingTeam = teamId !== null && teamId !== undefined && teamId !== 8;
+            const routeReason =
+                activeConv.custom_attributes?.route_reason
+                || activeConv.additional_attributes?.route_reason
+                || activeConv.meta?.custom_attributes?.route_reason
+                || null;
+            const isSoftAutomationRoute = routeReason ? SOFT_HANDOFF_ROUTE_REASONS.has(routeReason) : false;
+            const isHardHandoffRoute = routeReason ? HARD_HANDOFF_ROUTE_REASONS.has(routeReason) : false;
 
-            console.log(`[Chatwoot] checkBotActive details for ${activeConv.id}: hasAssignee=${hasAssignee}, teamId=${teamId}, hasBlockingTeam=${hasBlockingTeam}, assignee=${JSON.stringify(activeConv.meta?.assignee)}`);
+            console.log(`[Chatwoot] checkBotActive details for ${activeConv.id}: hasAssignee=${hasAssignee}, teamId=${teamId}, hasBlockingTeam=${hasBlockingTeam}, routeReason=${routeReason}, softRoute=${isSoftAutomationRoute}, hardRoute=${isHardHandoffRoute}, assignee=${JSON.stringify(activeConv.meta?.assignee)}`);
 
-            // Bloquear se houver humano OU equipe responsável (exceto gerência)
-            const isHumanHandled = hasAssignee || hasBlockingTeam;
+            // Handoffs leves não devem travar o bot; handoffs fortes continuam bloqueando.
+            const isHumanHandled = isSoftAutomationRoute
+                ? false
+                : isHardHandoffRoute || hasAssignee || hasBlockingTeam;
 
             if (isHumanHandled) {
                 console.log(`[Chatwoot] Humano/Equipe detectado na conversa ${activeConv.id}. Bot silenciado.`);
