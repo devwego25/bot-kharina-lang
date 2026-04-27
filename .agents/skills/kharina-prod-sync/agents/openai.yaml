@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kharina Prod Sync"
+  short_description: "Align local, GitHub, and VPS prod"
+  default_prompt: "Use $kharina-prod-sync to align the local checkout, GitHub main, and the VPS deployment so production remains the source of truth."
